@@ -111,6 +111,55 @@ def run_codex_app_server_turn(
     if turn.projected_messages:
         messages.extend(turn.projected_messages)
 
+    # Auto-ABACDA pre-delivery review (JEDI, Codex-B 2026-07-22 #2): review the codex answer HERE — BEFORE the external
+    # memory sync and the background-review fork below — so the UN-reviewed draft reaches NEITHER side effect. The
+    # corrective turn re-enters run_conversation (this same codex path) and is guarded by _abacda_retrying. Fails CLOSED
+    # (WITHHOLD) on any error; never bricks the codex turn. `_final_text` (not turn.final_text) is used from here on.
+    _final_text = turn.final_text
+    if (_final_text and not turn.interrupted and turn.error is None
+            and not getattr(agent, "_abacda_retrying", False)):
+        try:
+            from agent import abacda_review as _abacda_review
+            _final_text, _abacda_msgs, _ = _abacda_review.maybe_review_and_retry(
+                agent, user_message, _final_text, messages)
+            if isinstance(_abacda_msgs, list):
+                messages[:] = _abacda_msgs
+        except Exception:  # noqa: BLE001 — never raises by contract; if it does, WITHHOLD (no un-reviewed side effects)
+            logger.warning("Auto-ABACDA (codex_runtime) errored — WITHHOLDING answer", exc_info=True)
+            _final_text = "[AUTO-ABACDA: review could not complete — answer withheld (not certified).]"
+            # The draft is ALREADY in `messages` (turn.projected_messages was extended above) and would otherwise flow to
+            # _sync_external_memory_for_turn/_spawn_background_review and the caller. Strip it and append the withhold
+            # notice INLINE (no module import — the failure may be the import itself) so no side effect sees the raw draft
+            # and the persisted conversation carries the notice (codex 2026-07-23 C1).
+            try:
+                # Robust scrub (codex/gemini 2026-07-23 CC4/F2): extract the TEXT of each message's content — whether a
+                # plain string OR a list of content blocks — and strip any assistant message that carries the draft. This
+                # is EXTRACTED-text matching (not str(content), which fails for segmented block lists). Over-stripping is
+                # acceptable here: we are withholding (fail-closed). Inlined so it works even if abacda_review is broken.
+                def _mtext(content):
+                    if isinstance(content, str):
+                        return content
+                    if isinstance(content, list):
+                        parts = []
+                        for _b in content:
+                            if isinstance(_b, str):
+                                parts.append(_b)
+                            elif isinstance(_b, dict):
+                                _t = _b.get("text")
+                                if not isinstance(_t, str):
+                                    _t = _b.get("content")
+                                if isinstance(_t, str):
+                                    parts.append(_t)
+                        return "".join(parts)
+                    return ""
+                _draft = turn.final_text or ""
+                messages[:] = [m for m in messages
+                               if not (isinstance(m, dict) and m.get("role") == "assistant"
+                                       and _draft and _draft in _mtext(m.get("content")))]
+                messages.append({"role": "assistant", "content": _final_text})
+            except Exception:  # noqa: BLE001 — best effort; _final_text is already withheld regardless
+                pass
+
     # Counter ticks for the agent-improvement loop.
     # _turns_since_memory and _user_turn_count are ALREADY incremented
     # in the run_conversation() pre-loop block (lines ~11793-11817) so we
@@ -134,12 +183,16 @@ def run_codex_app_server_turn(
         agent._iters_since_skill = 0
 
     # External memory provider sync (mirrors line ~15439). Skipped on
-    # interrupt/error to avoid feeding partial transcripts to memory.
-    if not turn.interrupted and turn.error is None:
+    # interrupt/error to avoid feeding partial transcripts to memory, AND
+    # skipped during a PRIVATE corrective turn (Codex-B 2026-07-22 #1): the
+    # nested _abacda_retrying turn must sync nothing — only the outer turn,
+    # after a clean re-review, syncs the certified answer exactly once.
+    if (not turn.interrupted and turn.error is None
+            and not getattr(agent, "_abacda_retrying", False)):
         try:
             agent._sync_external_memory_for_turn(
                 original_user_message=original_user_message,
-                final_response=turn.final_text,
+                final_response=_final_text,           # REVIEWED/corrected text, never the un-reviewed draft (Codex #2)
                 interrupted=False,
             )
         except Exception:
@@ -152,6 +205,7 @@ def run_codex_app_server_turn(
         turn.final_text
         and not turn.interrupted
         and (should_review_memory or should_review_skills)
+        and not getattr(agent, "_abacda_retrying", False)   # private corrective turn forks no bg-review (Codex-B #1)
     ):
         try:
             agent._spawn_background_review(
@@ -163,7 +217,7 @@ def run_codex_app_server_turn(
             logger.debug("background review spawn raised", exc_info=True)
 
     return {
-        "final_response": turn.final_text,
+        "final_response": _final_text,               # REVIEWED/corrected text (Codex #2)
         "messages": messages,
         "api_calls": 1,  # one app-server "turn" maps to one logical API call
         "completed": not turn.interrupted and turn.error is None,

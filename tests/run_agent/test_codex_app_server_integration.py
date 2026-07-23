@@ -416,3 +416,151 @@ class TestSessionRetirementOnRunAgent:
         assert agent._codex_session is None
         assert result["completed"] is False
         assert "codex segfaulted" in result["error"]
+
+
+
+
+# --- Auto-ABACDA JEDI (Codex-B #1/#2): the codex_app_server review runs BEFORE external-memory sync AND the
+#     background-review fork, so BOTH side effects receive the REVIEWED candidate, never the raw draft. ---
+
+class TestAbacdaCodexPathOrdering:
+    def test_review_precedes_BOTH_side_effects(self, fake_session, monkeypatch):
+        import run_agent
+        import agent.abacda_review as AR
+        agent = _make_codex_agent()
+
+        synced = {}
+        monkeypatch.setattr(
+            run_agent.AIAgent, "_sync_external_memory_for_turn",
+            lambda self, *, original_user_message, final_response, interrupted: synced.update(fr=final_response),
+        )
+        bg = {}
+        monkeypatch.setattr(
+            run_agent.AIAgent, "_spawn_background_review",
+            lambda self, *, messages_snapshot, review_memory, review_skills: bg.update(snap=list(messages_snapshot)),
+        )
+        # the review returns STRIPPED messages (the real maybe_review_and_retry removes the uncertified draft) —
+        # exercise that the codex path splices the stripped result into `messages`, so no side effect sees the draft.
+        monkeypatch.setattr(
+            AR, "maybe_review_and_retry",
+            lambda ag, q, a, m: ("REVIEWED_CORRECTED_ANSWER",
+                                 AR._without_draft_and_feedback(m, a, None)
+                                 + [{"role": "assistant", "content": "REVIEWED_CORRECTED_ANSWER"}], {}),
+        )
+
+        # call the runtime function DIRECTLY with should_review_memory=True so the bg-review fork RELIABLY fires
+        result = agent._run_codex_app_server_turn(
+            user_message="do it", original_user_message="do it",
+            messages=[], effective_task_id="t", should_review_memory=True)
+
+        assert result["final_response"] == "REVIEWED_CORRECTED_ANSWER"          # returned = reviewed
+        assert synced.get("fr") == "REVIEWED_CORRECTED_ANSWER"                  # memory sync got REVIEWED, not draft
+        assert bg.get("snap") is not None                                      # background review FIRED
+        # Codex-B #1: the raw draft sentinel ("echo: do it") occurs ZERO times in BOTH side-effect inputs
+        assert "echo: do it" not in str(synced.get("fr"))
+        assert not any("echo: do it" == m.get("content") for m in bg["snap"])
+        _last_assistant = next((m for m in reversed(bg["snap"]) if m.get("role") == "assistant"), None)
+        assert _last_assistant is not None and _last_assistant.get("content") == "REVIEWED_CORRECTED_ANSWER"
+        # and the returned messages themselves carry no raw draft
+        assert not any("echo: do it" == m.get("content") for m in result.get("messages", []))
+
+
+class TestAbacdaCodexPrivacyAndDisplay:
+    """Codex-B 2026-07-22 #4 + #1 on the codex_app_server path."""
+
+    def test_production_session_has_no_display_hook(self):
+        # #4: the production constructor passes NO on_event, so this path emits NO token stream to a display sink and
+        # therefore cannot emit a raw pre-review draft through a display layer. (Corrects the earlier false comment.)
+        sess = CodexAppServerSession(cwd=".")
+        assert getattr(sess, "_on_event", "MISSING") is None
+
+    def test_codex_path_emits_no_raw_draft_to_stream_sink(self, fake_session, monkeypatch):
+        # #4/#6 behavioural: drive the real codex path with a capturing stream sink; the raw pre-review draft
+        # ("echo: do it") must NEVER reach the display sink (nothing streams token-by-token on this path).
+        import agent.abacda_review as AR
+        agent = _make_codex_agent()
+        captured = []
+        agent.stream_delta_callback = captured.append
+        agent._stream_callback = captured.append
+        monkeypatch.setattr(AR, "maybe_review_and_retry",
+                            lambda ag, q, a, m: (a, m, {"reviewed": True, "clean": True}))
+        with patch.object(agent, "_spawn_background_review", return_value=None):
+            result = agent.run_conversation("do it")
+        assert "echo: do it" not in "".join(str(c) for c in captured)   # zero raw-draft display emission
+        assert result["final_response"] == "echo: do it"                # answer still returned (via the turn result)
+
+    def test_private_retry_skips_codex_sync_and_bg(self, fake_session, monkeypatch):
+        # #1 on the codex path: during a PRIVATE corrective turn (_abacda_retrying=True) the codex runtime must NOT sync
+        # external memory and must NOT fork a background review (explicit guards alongside the adapter no-ops).
+        agent = _make_codex_agent()
+        agent._abacda_retrying = True
+        synced = {"n": 0}
+        bg = {"n": 0}
+        monkeypatch.setattr(run_agent.AIAgent, "_sync_external_memory_for_turn",
+                            lambda self, **k: synced.__setitem__("n", synced["n"] + 1))
+        monkeypatch.setattr(run_agent.AIAgent, "_spawn_background_review",
+                            lambda self, **k: bg.__setitem__("n", bg["n"] + 1))
+        result = agent._run_codex_app_server_turn(
+            user_message="do it", original_user_message="do it",
+            messages=[], effective_task_id="t", should_review_memory=True)
+        assert synced["n"] == 0 and bg["n"] == 0            # zero side effects on the codex path during the private turn
+        assert result["final_response"] == "echo: do it"    # the private turn still returns its candidate to the adapter
+
+
+class TestAbacdaCodexReviewException:
+    def test_review_exception_strips_draft_and_appends_notice(self, fake_session, monkeypatch):
+        # codex 2026-07-23 C1: if maybe_review_and_retry raises on the codex path, the draft (already in messages via
+        # projected_messages) must be stripped and the withhold notice appended, so NO side effect sees the raw draft.
+        import agent.abacda_review as AR
+        agent = _make_codex_agent()
+        synced = {}
+        monkeypatch.setattr(
+            run_agent.AIAgent, "_sync_external_memory_for_turn",
+            lambda self, *, original_user_message, final_response, interrupted: synced.update(fr=final_response),
+        )
+        monkeypatch.setattr(AR, "maybe_review_and_retry",
+                            lambda ag, q, a, m: (_ for _ in ()).throw(RuntimeError("review boom")))
+        result = agent._run_codex_app_server_turn(
+            user_message="do it", original_user_message="do it",
+            messages=[], effective_task_id="t", should_review_memory=True)
+        msgs = result.get("messages", [])
+        assert not any(m.get("content") == "echo: do it" for m in msgs)          # raw draft stripped from messages (C1)
+        assert any("withheld" in str(m.get("content", "")).lower() for m in msgs)  # notice appended
+        assert "echo: do it" not in str(synced.get("fr"))                        # sync did not see the raw draft
+        assert "withheld" in str(result.get("final_response", "")).lower()       # returned answer withheld
+
+
+class TestAbacdaCodexScrubRobustness:
+    def test_review_exception_scrubs_structured_content(self, monkeypatch):
+        # codex 2026-07-23 CC4: the scrub must catch draft bytes even in STRUCTURED/segmented assistant content
+        # (content is a list of blocks, not a bare string), not only an exact-string message.
+        import agent.abacda_review as AR
+
+        def structured_run_turn(self, user_input: str, **kwargs):
+            return TurnResult(
+                final_text="echo: do it",
+                projected_messages=[
+                    # SEGMENTED across blocks: str(content) is NOT contiguous "echo: do it" — only extracted-text is.
+                    {"role": "assistant", "content": [{"type": "text", "text": "echo: "},
+                                                      {"type": "text", "text": "do it"}]},
+                ],
+                tool_iterations=1, interrupted=False, error=None,
+                turn_id="t1", thread_id="th1",
+            )
+        monkeypatch.setattr(CodexAppServerSession, "run_turn", structured_run_turn)
+        monkeypatch.setattr(CodexAppServerSession, "ensure_started", lambda self: "th1")
+        agent = _make_codex_agent()
+        synced = {}
+        monkeypatch.setattr(
+            run_agent.AIAgent, "_sync_external_memory_for_turn",
+            lambda self, *, original_user_message, final_response, interrupted: synced.update(fr=final_response),
+        )
+        monkeypatch.setattr(AR, "maybe_review_and_retry",
+                            lambda ag, q, a, m: (_ for _ in ()).throw(RuntimeError("review boom")))
+        result = agent._run_codex_app_server_turn(
+            user_message="do it", original_user_message="do it",
+            messages=[], effective_task_id="t", should_review_memory=True)
+        blob = " ".join(str(m.get("content", "")) for m in result.get("messages", []))
+        assert "echo: do it" not in blob                             # structured draft stripped (CC4)
+        assert any("withheld" in str(m.get("content", "")).lower() for m in result.get("messages", []))
+        assert "echo: do it" not in str(synced.get("fr"))            # sync did not see the structured draft

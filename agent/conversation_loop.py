@@ -337,6 +337,51 @@ def run_conversation(
 
     # Store stream callback for _interruptible_api_call to pick up
     agent._stream_callback = stream_callback
+    # Auto-ABACDA (JEDI fix 4): hold FINAL-ANSWER stream deltas so an un-reviewed draft never reaches the user before
+    # the pre-delivery review runs. If the review machinery cannot be armed (import/install failure) we FAIL CLOSED —
+    # suppress the draft stream inline (null the sinks, remembered for a module-free restore) so nothing un-reviewed
+    # leaks, and withhold at the boundary below. No-op for nested corrective turns / consumer-less (oneshot/cron) runs.
+    _abacda_orig_sinks = (getattr(agent, "stream_delta_callback", None),
+                          getattr(agent, "_stream_callback", None))       # the LIVE user sinks, before any swap
+    _abacda_stream_token = None
+    _abacda_saved_sinks = None
+    _abacda_ok = False
+    try:
+        from agent import abacda_review as _abacda_review_mod
+        _abacda_stream_token = _abacda_review_mod.install_answer_buffer(agent)
+        _abacda_ok = True
+    except Exception as _abacda_arm_err:  # noqa: BLE001 — review unavailable -> suppress the draft (fail closed)
+        logger.warning("Auto-ABACDA could not arm review — suppressing draft, withholding answer: %s", _abacda_arm_err)
+        try:
+            _abacda_saved_sinks = (getattr(agent, "stream_delta_callback", None),
+                                   getattr(agent, "_stream_callback", None))
+            if _abacda_saved_sinks[0] is not None or _abacda_saved_sinks[1] is not None:
+                agent.stream_delta_callback = None
+                agent._stream_callback = None
+        except Exception:  # noqa: BLE001
+            _abacda_saved_sinks = None
+    # PRE-GENERATION stream-safety gate (gemini 2026-07-23): a raw draft streams token-by-token DURING generation, so if
+    # a final-answer sink is still the LIVE ORIGINAL callback (buffer swap AND nulling both failed), the end-of-turn
+    # withhold is moot — the draft already reached the user. Force any surviving live sink dead; if it CANNOT be made
+    # dead, do NOT generate — withhold immediately (fail closed) rather than stream an un-reviewed draft. SKIP when install
+    # was a deliberate no-op (`_abacda_ok` and no token): a NESTED corrective turn reuses the OUTER buffer (nulling it here
+    # would break suppression), and a consumer-less run has nothing to suppress.
+    if not (_abacda_ok and _abacda_stream_token is None):
+        _abacda_stream_unsafe = False
+        for _attr, _orig in (("stream_delta_callback", _abacda_orig_sinks[0]),
+                             ("_stream_callback", _abacda_orig_sinks[1])):
+            if _orig is not None and getattr(agent, _attr, None) is _orig:
+                try:
+                    setattr(agent, _attr, None)
+                except Exception:  # noqa: BLE001
+                    pass
+                if getattr(agent, _attr, None) is _orig:
+                    _abacda_stream_unsafe = True
+        if _abacda_stream_unsafe:
+            return {
+                "final_response": "[AUTO-ABACDA: stream suppression could not be guaranteed — answer withheld (not certified).]",
+                "messages": messages, "api_calls": 0, "completed": False, "partial": True, "error": "abacda_stream_unsafe",
+            }
     agent._persist_user_message_idx = None
     agent._persist_user_message_override = persist_user_message
     # Generate unique task_id if not provided to isolate VMs between concurrent tasks
@@ -664,13 +709,33 @@ def run_conversation(
     # See agent/transports/codex_app_server_session.py for the adapter
     # and references/codex-app-server-runtime.md for the rationale.
     if agent.api_mode == "codex_app_server":
-        return agent._run_codex_app_server_turn(
-            user_message=user_message,
-            original_user_message=original_user_message,
-            messages=messages,
-            effective_task_id=effective_task_id,
-            should_review_memory=_should_review_memory,
-        )
+        # Auto-ABACDA governs the codex_app_server runtime too — but the review now happens INSIDE
+        # run_codex_app_server_turn, BEFORE that path's external-memory sync + background-review side effects (Codex-B
+        # 2026-07-22 #2), so it is not repeated here. CORRECTION (Codex-B 2026-07-22 #4): the production session
+        # constructor (codex_runtime.py: CodexAppServerSession(cwd, approval_callback)) passes NO on_event, so this path
+        # emits NO token stream to the user's display sink — the certified final answer is returned in the turn result
+        # after the in-runtime review. It therefore never emits a raw draft through a display layer. We still RESTORE the
+        # buffered sinks here — always, in `finally`, even if the runtime raises — so the default streaming path's sinks
+        # are never left swapped out; we do NOT flush an emit (there was nothing buffered to emit on this path).
+        try:
+            return agent._run_codex_app_server_turn(
+                user_message=user_message,
+                original_user_message=original_user_message,
+                messages=messages,
+                effective_task_id=effective_task_id,
+                should_review_memory=_should_review_memory,
+            )
+        finally:
+            if _abacda_ok:
+                try:
+                    _abacda_review_mod.flush_answer(agent, _abacda_stream_token, "")   # restore sinks only (no emit)
+                except Exception:  # noqa: BLE001
+                    pass
+            elif _abacda_saved_sinks is not None:
+                try:
+                    agent.stream_delta_callback, agent._stream_callback = _abacda_saved_sinks
+                except Exception:  # noqa: BLE001
+                    pass
 
     while (api_call_count < agent.max_iterations and agent.iteration_budget.remaining > 0) or agent._budget_grace_call:
         # Reset per-turn checkpoint dedup so each iteration can take one snapshot
@@ -4107,6 +4172,97 @@ def run_conversation(
                     _kanban_task,
                     exc_info=True,
                 )
+
+    # Hermes-native Auto-ABACDA (JEDI): before delivery, review this substantive final answer through the ONE shared
+    # engine (tiering + deterministic sanitization + canonical concurrent arms + five-part record), feed genuine
+    # findings back for exactly ONE corrective turn, RE-REVIEW the correction once, and deliver the corrected answer OR
+    # report BLOCKED. T0/T1 trivia stays silent; a clean review is silent. Fail CLOSED for T2+ (engine error / missing
+    # lane / unsanitizable value / failed correction never release the original as done). Guarded by ``_abacda_retrying``.
+    # The held draft is discarded and the FINAL answer emitted once via flush_answer (fix 4). The self-review itself must
+    # never brick delivery, so the whole block fails safe.
+    # The assistant DRAFT was already appended to `messages` (the final_msg above) before this boundary. On every
+    # FAIL-CLOSED path that only overwrites `final_response` (degraded hold, review exception, review not armed), that
+    # draft would otherwise remain in the returned/persisted `messages` and flow to any downstream side effect. Capture
+    # it now and, on each such path, strip it from `messages` and append the withhold notice (codex 2026-07-23 C2). This
+    # is inlined (no module dependency — arming may have failed) and never raises.
+    _abacda_draft = final_response
+
+    def _abacda_mtext(content):
+        # extract concatenated text from str or list-of-blocks content (segmented-safe; codex/gemini 2026-07-23 CC5/F2)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for _b in content:
+                if isinstance(_b, str):
+                    parts.append(_b)
+                elif isinstance(_b, dict):
+                    _t = _b.get("text")
+                    if not isinstance(_t, str):
+                        _t = _b.get("content")
+                    if isinstance(_t, str):
+                        parts.append(_t)
+            return "".join(parts)
+        return ""
+
+    def _abacda_withhold_messages(_notice):
+        try:
+            # Robust scrub: strip ANY assistant message whose EXTRACTED text carries the draft (segmented-safe, not
+            # str(content)), so structured/chunked assistant content cannot leave draft bytes behind. Over-stripping is
+            # acceptable on a fail-closed withhold path.
+            if isinstance(_abacda_draft, str) and _abacda_draft:
+                messages[:] = [m for m in messages
+                               if not (isinstance(m, dict) and m.get("role") == "assistant"
+                                       and _abacda_draft in _abacda_mtext(m.get("content")))]
+            messages.append({"role": "assistant", "content": _notice})
+        except Exception:  # noqa: BLE001 — best effort; final_response is already withheld regardless
+            pass
+
+    if _abacda_ok and isinstance(_abacda_stream_token, dict) and _abacda_stream_token.get("degraded"):
+        # the draft stream could not be safely held (partial sink swap) -> WITHHOLD, never risk a leaked draft.
+        final_response = "[AUTO-ABACDA: draft stream could not be safely held — answer withheld (not certified).]"
+        _abacda_withhold_messages(final_response)                     # C2: strip the draft from messages too
+    elif _abacda_ok and final_response and not interrupted:
+        try:
+            final_response, messages, _abacda_rev = _abacda_review_mod.maybe_review_and_retry(
+                agent, user_message, final_response, messages)
+        except Exception as _abacda_err:  # noqa: BLE001 — maybe_review_and_retry is contracted never to raise; if it
+            # somehow does, FAIL CLOSED and WITHHOLD (never disclose the un-reviewed answer).
+            logger.warning("Auto-ABACDA self-review errored — WITHHOLDING answer: %s", _abacda_err)
+            final_response = "[AUTO-ABACDA: review could not complete — answer withheld (not certified).]"
+            _abacda_withhold_messages(final_response)                 # C2: exception path must also sanitize messages
+    if _abacda_ok:
+        try:
+            if not _abacda_review_mod.flush_answer(agent, _abacda_stream_token, final_response or ""):
+                logger.warning("Auto-ABACDA stream flush/restore reported a failure")
+        except Exception as _abacda_flush_err:  # noqa: BLE001 — flush/restore must never brick delivery
+            logger.warning("Auto-ABACDA stream flush skipped: %s", _abacda_flush_err)
+    else:
+        # Review never armed (import/install failure) -> FAIL CLOSED UNCONDITIONALLY (gemini 2026-07-23): WITHHOLD the
+        # answer whether or not the inline sink-nulling above succeeded. The prior code only withheld when
+        # `_abacda_saved_sinks is not None`, so a nulling failure (saved_sinks left None) fell through and delivered the
+        # un-reviewed draft. The withhold of the RETURNED/persisted answer must not depend on the sink bookkeeping.
+        final_response = "[AUTO-ABACDA: review machinery unavailable — answer withheld (not certified).]"
+        _abacda_withhold_messages(final_response)                     # C2: strip the draft from returned/persisted messages
+        if _abacda_saved_sinks is not None:
+            # best-effort: restore the real sinks and emit the withhold notice once (dedup by receiver+function so
+            # distinct bound methods deliver it once — Codex #4). Failure here cannot un-withhold the answer above.
+            try:
+                agent.stream_delta_callback, agent._stream_callback = _abacda_saved_sinks
+                _seen_sinks = set()
+                for _cb in _abacda_saved_sinks:
+                    if _cb is None:
+                        continue
+                    _k = (id(getattr(_cb, "__self__", _cb)), getattr(_cb, "__func__", None) or id(_cb))
+                    if _k in _seen_sinks:
+                        continue
+                    _seen_sinks.add(_k)
+                    try:
+                        _cb(final_response)
+                    except Exception:  # noqa: BLE001
+                        pass
+            except Exception:  # noqa: BLE001
+                pass
 
     # Determine if conversation completed successfully
     completed = (
