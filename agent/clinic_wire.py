@@ -15,6 +15,16 @@ MARKERS = (
     "clinic letter",
     "this is an appraisal",
 )
+# One of these can be an ordinary question. Two together are a letter.
+LETTER_CUES = (
+    "dictated but not signed",
+    "procedure code",
+    "on examination",
+    "past history",
+    "red flag",
+    "follow-up appointment",
+    "medial branch block",
+)
 DENIED = (
     "/usr/local/LOCAL_Private_Patients_Local_Only",
     "/usr/local/PatentVault",
@@ -44,11 +54,23 @@ CODEX_REFUSAL = (
 )
 
 
+def _is_clinic(folded: str) -> bool:
+    if any(marker in folded for marker in MARKERS):
+        return True
+    hits = 0
+    for cue in LETTER_CUES:
+        if cue in folded:
+            hits += 1
+            if hits >= 2:
+                return True
+    return False
+
+
 def refusal_for(text: str, *, vendor: str) -> str:
     if not text:
         return ""
     folded = text.casefold()
-    if any(marker in folded for marker in MARKERS):
+    if _is_clinic(folded):
         return CODEX_REFUSAL if vendor == "codex" else CLAUDE_REFUSAL
     for root in DENIED:
         if root.casefold() in folded:
