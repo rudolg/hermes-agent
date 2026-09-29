@@ -1053,6 +1053,14 @@ def _ladder_rungs(requested_provider, explicit_api_key, explicit_base_url, targe
                        "sk-ant-oat-hermes-broker-placeholder", source="local-broker",
                        requested_provider=requested_provider)
         return
+    if requested_provider == "codex-bunker":
+        if explicit_api_key or explicit_base_url:
+            raise AuthError("Codex Bunker uses its local controller; external credentials or URLs are refused",
+                            provider="codex-bunker", code="unsupported_override")
+        yield _runtime("codex-bunker", "chat_completions", "codex-bunker://local",
+                       "local-bunker-placeholder", source="local-bunker",
+                       requested_provider=requested_provider)
+        return
     yield _named_custom_rung(requested_provider, explicit_api_key, explicit_base_url, target_model)
     # If provider is "auto" (or unset) but config.yaml has an explicit base_url pointing at a custom/local
     # endpoint (e.g. Ollama at localhost:11434), route through the OpenAI-compatible resolver instead of

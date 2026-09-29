@@ -977,6 +977,14 @@ def _apply_openai_header_policy(agent, client_kwargs: Dict[str, Any]) -> None:
 
 def _init_openai_client(agent, api_key, base_url, fallback_model, _provider_timeout):
     """OpenAI-wire client: resolve kwargs, apply header/TLS policy, construct."""
+    if agent.provider == "codex-bunker":
+        from agent.codex_bunker_adapter import CodexBunkerClient
+        agent.client = CodexBunkerClient(agent)
+        agent.base_url = "codex-bunker://local"
+        agent.api_key = ""
+        agent._client_kwargs = {}
+        agent._disable_streaming = True
+        return
     if api_key and base_url:
         client_kwargs = _explicit_client_kwargs(agent, api_key, base_url, _provider_timeout)
     else:
@@ -1257,6 +1265,10 @@ def _apply_display_config(agent, _agent_cfg, platform):
     # backends with broken streaming tool calls. Session-scoped; orthogonal to display.streaming.
     _streaming = str(_model_section.get("streaming", "true")).strip().lower()
     agent._disable_streaming = _streaming in {"false", "0", "no", "off"}
+    if agent.provider == "codex-bunker":
+        # The local bridge returns complete native tool/final events to Hermes;
+        # it is not an OpenAI SSE endpoint.
+        agent._disable_streaming = True
     if not agent._disable_streaming and _streaming not in {"true", "1", "yes", "on"}:
         logger.warning(
             "Invalid model.streaming=%r; expected a boolean. Using streaming (default).",

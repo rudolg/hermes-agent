@@ -446,7 +446,7 @@ class ClientLifecycleMixin:
     def _create_request_openai_client(self, *, reason: str, api_kwargs: Optional[dict] = None) -> Any:
         from unittest.mock import Mock
         primary_client = self._ensure_primary_openai_client(reason=reason)
-        if self.provider == "moa" or isinstance(primary_client, Mock):
+        if self.provider in {"moa", "codex-bunker"} or isinstance(primary_client, Mock):
             return primary_client
         with self._openai_client_lock():
             request_kwargs = dict(self._client_kwargs)
