@@ -774,6 +774,14 @@ start_ui
 LEGACY_INSTALL=0
 [ -d "$INSTALL_ROOT/pm" ] || LEGACY_INSTALL=1
 select_update_invoke() {
+  # This Mac's outside launcher runs hermes-carry after update. Prefer it
+  # over the copy inside the checkout, which the updater replaces.
+  local outside="$HOME/.local/bin/hermes"
+  if [ -x "$outside" ] && grep -q 'hermes-carry' "$outside" 2>/dev/null; then
+    HERMES_BIN="$outside"
+    UPDATE_INVOKE=("$outside")
+    return 0
+  fi
   HERMES_BIN="$INSTALL_ROOT/.hermes/bin/hermes"
   if [ -x "$HERMES_BIN" ]; then
     UPDATE_INVOKE=("$HERMES_BIN")
