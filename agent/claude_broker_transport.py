@@ -8,6 +8,7 @@ not prevent Broker upgrades.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 import socket
@@ -15,8 +16,13 @@ import uuid
 
 import httpx
 
+from agent.clinic_wire import (
+    CLAUDE_REFUSAL, anthropic_requests_stream, anthropic_user_text, refusal_for,
+)
+
 
 BROKER_ROOT = Path.home() / ".local" / "state" / "claude-broker"
+logger = logging.getLogger(__name__)
 
 
 def _control(root: Path, payload: dict) -> dict:
@@ -56,13 +62,18 @@ class _LeasedStream(httpx.SyncByteStream):
 
 
 class ClaudeBrokerTransport(httpx.BaseTransport):
-    """Forward native Anthropic requests; no content transformation or token access."""
+    """Forward native Anthropic requests. Clinic text is answered locally and is not forwarded."""
 
     def __init__(self, root: Path = BROKER_ROOT):
         self.root = root
         self.native = httpx.HTTPTransport(uds=str(root / "api.sock"))
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
+        body = request.content
+        refusal = refusal_for(anthropic_user_text(body), vendor="claude")
+        if refusal:
+            logger.info("clinic refused before claude")
+            return _refusal_response(request, body, refusal)
         pid = os.getpid()
         session = str(uuid.uuid4())
         conversation = request.headers.get("x-hermes-conversation-id")
@@ -102,3 +113,56 @@ class ClaudeBrokerTransport(httpx.BaseTransport):
 
     def close(self):
         self.native.close()
+
+
+def _message(model: str, text: str) -> dict:
+    return {
+        "id": "msg_local_clinic_refusal",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": text}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 0, "output_tokens": 0},
+    }
+
+
+def _sse(model: str, text: str) -> bytes:
+    message = _message(model, text)
+    message["content"] = []
+    message["stop_reason"] = None
+    events = [
+        ("message_start", {"type": "message_start", "message": message}),
+        ("content_block_start", {
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        }),
+        ("content_block_delta", {
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": text},
+        }),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ("message_delta", {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 0},
+        }),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    lines = []
+    for name, payload in events:
+        lines.append(f"event: {name}\ndata: {json.dumps(payload, separators=(',', ':'))}\n")
+    return ("\n".join(lines) + "\n").encode()
+
+
+def _refusal_response(request: httpx.Request, body: bytes, text: str) -> httpx.Response:
+    model, stream = anthropic_requests_stream(body)
+    if not text:
+        text = CLAUDE_REFUSAL
+    if stream:
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"},
+            content=_sse(model, text), request=request,
+        )
+    return httpx.Response(200, json=_message(model, text), request=request)

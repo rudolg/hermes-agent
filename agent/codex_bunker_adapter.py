@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import select
@@ -18,6 +19,10 @@ import threading
 import time
 from types import SimpleNamespace
 import uuid
+
+from agent.clinic_wire import content_text, refusal_for
+
+logger = logging.getLogger(__name__)
 
 
 MAX_LINE = 16 * 1024 * 1024
@@ -160,6 +165,13 @@ class CodexBunkerClient:
 
     def create(self, **kwargs):
         with self.lock:
+            messages = kwargs.get("messages") or []
+            refusal = _clinic_refusal(messages)
+            if refusal:
+                logger.info("clinic refused before codex")
+                if self.proc is not None:
+                    self.close()
+                return _completion({"type": "final", "content": refusal}, kwargs.get("model") or "")
             if self.proc is None:
                 self._start(kwargs)
             elif (_tool_specs(kwargs.get("tools")) != self.tool_specs
@@ -217,3 +229,14 @@ class CodexBunkerClient:
             self.model = None
             self.tool_specs = None
             self.pending_call = None
+
+
+def _clinic_refusal(messages) -> str:
+    if not isinstance(messages, list):
+        return ""
+    parts = []
+    for row in messages:
+        if not isinstance(row, dict) or row.get("role") not in {"user", "tool"}:
+            continue
+        parts.append(content_text(row.get("content")))
+    return refusal_for("\n".join(parts), vendor="codex")
