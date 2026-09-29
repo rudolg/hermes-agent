@@ -1,8 +1,9 @@
 """Choose the seat before the mouth speaks.
 
-Short ordinary chat stays on the saved mouth. A long desktop or CLI turn asks
-Sonnet 5.5 first. Trading and code go to Codex Sol for that turn only. Clinic
-text is not sent to Sonnet; the vendor wire refuses it.
+The saved mouth is the Opus family. The broker fills in the newest Opus.
+A long desktop or CLI turn asks the newest Sonnet which family should speak.
+Codex is the newest Sol. Fable and Astra are used only when that turn needs them.
+Clinic text is not sent to Sonnet; the vendor wire refuses it.
 """
 
 from __future__ import annotations
@@ -17,7 +18,14 @@ logger = logging.getLogger(__name__)
 
 SCALE = "/Users/spinec/bin/hermes-scale"
 ORDINARY_LIMIT = 280
-SOL_MODEL = "gpt-6-sol"
+# Family names. The broker and the bunker resolve these to the newest model.
+CODEX_FAMILY = "sol"
+ASTRA_FAMILY = "astra"
+FABLE_FAMILY = "fable"
+EXPLICIT_PREFIXES = (
+    "scale move:", "scale stay:", "scale clinical:",
+    "scale opus:", "scale codex:", "scale fable:", "scale astra:",
+)
 PHONES = {
     "telegram", "discord", "slack", "whatsapp", "matrix", "mattermost",
     "email", "cron", "signal", "homeassistant",
@@ -91,7 +99,7 @@ def classify(text: str) -> str:
     if not word:
         return "stay"
     token = word[0].strip(".,:;").lower()
-    if token in {"ordinary", "stay", "move", "clinical"}:
+    if token in {"ordinary", "stay", "move", "clinical", "opus", "codex", "fable", "astra"}:
         return token
     return "stay"
 
@@ -106,13 +114,13 @@ def _snapshot(agent):
     return snap
 
 
-def _swap_to_sol(agent):
+def _swap_bunker(agent, family):
     snap = _snapshot(agent)
     try:
         from agent.codex_bunker_adapter import CodexBunkerClient
         agent.provider = "codex-bunker"
         agent.requested_provider = "codex-bunker"
-        agent.model = SOL_MODEL
+        agent.model = family
         agent.api_mode = "chat_completions"
         agent.base_url = "codex-bunker://local"
         agent.api_key = ""
@@ -121,12 +129,19 @@ def _swap_to_sol(agent):
     except Exception:
         restore_seat(agent, snap)
         raise
-    logger.info("seat route move: %s -> %s", snap.get("model"), SOL_MODEL)
+    logger.info("seat route %s: %s -> %s", family, snap.get("model"), family)
+    return snap
+
+
+def _swap_fable(agent):
+    snap = _snapshot(agent)
+    agent.model = FABLE_FAMILY
+    logger.info("seat route fable: %s -> %s", snap.get("model"), FABLE_FAMILY)
     return snap
 
 
 def handoff_to_sol(agent, user_message):
-    """Return a restore snapshot when this turn should speak as Sol. None keeps the mouth."""
+    """Return a restore snapshot when this turn leaves the Opus mouth. None keeps it."""
     try:
         if getattr(agent, "provider", None) != "claude-broker":
             return None
@@ -142,14 +157,18 @@ def handoff_to_sol(agent, user_message):
         if refusal_for(stripped, vendor="claude"):
             return None
         low = stripped.lower()
-        explicit = low.startswith(("scale move:", "scale stay:", "scale clinical:"))
+        explicit = low.startswith(EXPLICIT_PREFIXES)
         if not explicit and len(stripped) < ORDINARY_LIMIT:
             return None
         route = classify(stripped)
-        if route != "move":
-            logger.info("seat route %s: mouth stays", route)
-            return None
-        return _swap_to_sol(agent)
+        if route in {"move", "codex"}:
+            return _swap_bunker(agent, CODEX_FAMILY)
+        if route == "astra":
+            return _swap_bunker(agent, ASTRA_FAMILY)
+        if route == "fable":
+            return _swap_fable(agent)
+        logger.info("seat route %s: mouth stays", route)
+        return None
     except Exception:
         logger.warning("seat route skipped", exc_info=True)
         return None
