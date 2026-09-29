@@ -7,6 +7,7 @@ part of the text those doors scan, and it is not scanned here either.
 from __future__ import annotations
 
 import json
+import re
 
 MARKERS = (
     "hospital number",
@@ -54,12 +55,17 @@ CODEX_REFUSAL = (
 )
 
 
+def _has_phrase(folded: str, phrase: str) -> bool:
+    # "hospital numbers" and "clinic letters" are instructions, not a letter.
+    return re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", folded) is not None
+
+
 def _is_clinic(folded: str) -> bool:
-    if any(marker in folded for marker in MARKERS):
+    if any(_has_phrase(folded, marker) for marker in MARKERS):
         return True
     hits = 0
     for cue in LETTER_CUES:
-        if cue in folded:
+        if _has_phrase(folded, cue):
             hits += 1
             if hits >= 2:
                 return True
