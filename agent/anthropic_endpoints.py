@@ -29,6 +29,10 @@ def _is_third_party_anthropic_endpoint(base_url: str | None) -> bool:
     """Any non-anthropic.com endpoint (own x-api-key keys; skip OAuth detection). No base_url =
     direct Anthropic API."""
     normalized = _normalized_lower(base_url)
+    if normalized == "claude-broker://local":
+        # The local Broker forwards to api.anthropic.com without changing
+        # message blocks, so signed thinking must follow the native path.
+        return False
     return bool(normalized) and "anthropic.com" not in normalized
 
 

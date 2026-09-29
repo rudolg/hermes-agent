@@ -1045,6 +1045,14 @@ def _ladder_rungs(requested_provider, explicit_api_key, explicit_base_url, targe
     """Ladder rungs 2-8, yielded lazily so each is evaluated only when the previous one returned
     nothing; the last rung (OpenRouter / bare-custom fallback) always yields a runtime."""
     yield _resolve_requested_shortcuts(requested_provider, explicit_api_key, explicit_base_url, target_model)
+    if requested_provider == "claude-broker":
+        if explicit_api_key or explicit_base_url:
+            raise AuthError("Claude Broker uses its local socket; external credentials or URLs are refused",
+                            provider="claude-broker", code="unsupported_override")
+        yield _runtime("claude-broker", "anthropic_messages", "claude-broker://local",
+                       "sk-ant-oat-hermes-broker-placeholder", source="local-broker",
+                       requested_provider=requested_provider)
+        return
     yield _named_custom_rung(requested_provider, explicit_api_key, explicit_base_url, target_model)
     # If provider is "auto" (or unset) but config.yaml has an explicit base_url pointing at a custom/local
     # endpoint (e.g. Ollama at localhost:11434), route through the OpenAI-compatible resolver instead of

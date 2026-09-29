@@ -462,6 +462,24 @@ def build_anthropic_client(api_key, base_url: str = None, timeout: float = None,
     client-level beta header — the reactive OAuth retry in run_agent uses it after a subscription
     rejects it; fresh clients keep the default so 1M-capable subscriptions keep the capability."""
     sdk = _require_sdk("the Anthropic provider")
+    if base_url == "claude-broker://local":
+        from httpx import Client, Timeout
+        from agent.claude_broker_transport import ClaudeBrokerTransport
+
+        read_timeout = float(timeout) if isinstance(timeout, (int, float)) and timeout > 0 else 900.0
+        kwargs = {
+            "base_url": "http://broker.local",
+            "auth_token": "sk-ant-oat-hermes-broker-placeholder",
+            "http_client": Client(
+                transport=ClaudeBrokerTransport(),
+                timeout=Timeout(timeout=read_timeout, connect=10.0),
+            ),
+            "timeout": Timeout(timeout=read_timeout, connect=10.0),
+        }
+        headers = _beta_header(_OAUTH_ONLY_BETAS)
+        headers["user-agent"] = f"claude-code/{_get_claude_code_version()} (external, cli)"
+        headers["x-app"] = "cli"
+        return _new_sdk_client(sdk, kwargs, headers, route=base_url)
     if callable(api_key) and not isinstance(api_key, str):
         return _build_anthropic_client_with_bearer_hook(
             api_key, base_url, timeout, drop_context_1m_beta=drop_context_1m_beta

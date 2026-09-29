@@ -43,6 +43,8 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
                                  base_url_override="acp://copilot", base_url_env_var="COPILOT_ACP_BASE_URL"),
     "github-copilot": HermesOverlay(extra_env_vars=("COPILOT_GITHUB_TOKEN", "GH_TOKEN")),
     "anthropic": HermesOverlay(transport="anthropic_messages", extra_env_vars=("ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN")),
+    "claude-broker": HermesOverlay(transport="anthropic_messages", auth_type="local_broker",
+                                    base_url_override="claude-broker://local"),
     "zai": HermesOverlay(extra_env_vars=("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"), base_url_env_var="GLM_BASE_URL"),
     "kimi-for-coding": HermesOverlay(base_url_env_var="KIMI_BASE_URL"),
     "stepfun": HermesOverlay(extra_env_vars=("STEPFUN_API_KEY",),

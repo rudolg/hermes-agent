@@ -390,9 +390,10 @@ def _resolve_api_mode(agent, api_mode, provider_name, base_url):
     elif provider_name is None and host == "api.x.ai":
         agent.api_mode = "codex_responses"
         agent.provider = "xai"
-    elif agent.provider == "anthropic" or (provider_name is None and host == "api.anthropic.com"):
+    elif agent.provider in {"anthropic", "claude-broker"} or (provider_name is None and host == "api.anthropic.com"):
         agent.api_mode = "anthropic_messages"
-        agent.provider = "anthropic"
+        if agent.provider != "claude-broker":
+            agent.provider = "anthropic"
     elif url.rstrip("/").endswith("/anthropic"):
         # Third-party Anthropic-compatible endpoints (MiniMax, DashScope) end in /anthropic.
         agent.api_mode = "anthropic_messages"
@@ -742,8 +743,11 @@ def _init_anthropic_client(agent, api_key, base_url, _provider_timeout):
     # ANTHROPIC_TOKEN fallback only for native Anthropic — other anthropic_messages providers
     # must use their own key or Anthropic credentials leak to third-party endpoints.
     # Falling back would send Anthropic credentials to third-party endpoints (Fixes #1739, #minimax-401).
-    _is_native_anthropic = agent.provider == "anthropic"
-    effective_key = api_key or (resolve_anthropic_token(model=getattr(agent, "model", None)) if _is_native_anthropic else None) or ""
+    broker_route = base_url == "claude-broker://local"
+    _is_native_anthropic = agent.provider == "anthropic" and not broker_route
+    effective_key = ("sk-ant-oat-hermes-broker-placeholder" if broker_route else
+                     api_key or (resolve_anthropic_token(model=getattr(agent, "model", None))
+                                 if _is_native_anthropic else None) or "")
 
     # MiniMax OAuth tokens live ~15 min and the SDK freezes api_key at construction, so use a
     # callable provider: build_anthropic_client mints a fresh bearer per request (re-reading
@@ -767,7 +771,8 @@ def _init_anthropic_client(agent, api_key, base_url, _provider_timeout):
     # trip OAuth code paths — doing so injects Claude-Code identity headers and system prompts that
     # cause 401/403 on their endpoints. See #1739.
     from agent.anthropic_credentials import anthropic_route_is_oauth
-    agent._is_anthropic_oauth = anthropic_route_is_oauth(base_url, effective_key, provider=agent.provider)
+    agent._is_anthropic_oauth = broker_route or anthropic_route_is_oauth(
+        base_url, effective_key, provider=agent.provider)
     agent._anthropic_client = build_anthropic_client(effective_key, base_url, timeout=_provider_timeout)
     if not agent.quiet_mode:
         print(f"🤖 AI Agent initialized with model: {agent.model} (Anthropic native)")

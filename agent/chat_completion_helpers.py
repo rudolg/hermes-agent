@@ -1544,6 +1544,17 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
     from agent.opencode_affinity import merge_session_affinity_headers
 
     kwargs = _build_api_kwargs_for_mode(agent, api_messages, tools_for_api)
+    if str(getattr(agent, "_anthropic_base_url", "") or "").rstrip("/") == "claude-broker://local":
+        # Anthropic's signed thinking blocks belong to one conversation. The
+        # per-call SDK client is rebuilt during a tool loop, so its transport
+        # cannot mint the conversation id independently for each request.
+        from agent.opencode_affinity import resolve_affinity_key
+        key = resolve_affinity_key(getattr(agent, "session_id", None))
+        if key:
+            headers = dict(kwargs.get("extra_headers") or {})
+            headers["x-hermes-conversation-id"] = str(uuid.uuid5(
+                uuid.NAMESPACE_URL, "hermes-claude-broker:" + key))
+            kwargs["extra_headers"] = headers
     return merge_session_affinity_headers(
         kwargs,
         getattr(agent, "provider", None),

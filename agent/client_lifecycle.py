@@ -78,12 +78,16 @@ def _swap_fallback_clients(agent, fb_client, fb_provider: str, fb_model: str, fb
     if fb_api_mode == "anthropic_messages":
         from agent.anthropic_adapter import build_anthropic_client
         from agent.anthropic_credentials import resolve_anthropic_token, anthropic_route_is_oauth
-        is_anthropic = fb_provider == "anthropic"
-        effective_key = credential or (resolve_anthropic_token(model=getattr(agent, "model", None)) if is_anthropic else None) or ""
+        broker_route = fb_base_url == "claude-broker://local"
+        is_anthropic = fb_provider == "anthropic" and not broker_route
+        effective_key = ("sk-ant-oat-hermes-broker-placeholder" if broker_route else
+                         credential or (resolve_anthropic_token(model=getattr(agent, "model", None))
+                                        if is_anthropic else None) or "")
         agent.api_key = agent._anthropic_api_key = effective_key
         agent._anthropic_base_url = fb_base_url
         agent._anthropic_client = build_anthropic_client(effective_key, fb_base_url, timeout=timeout)
-        agent._is_anthropic_oauth = anthropic_route_is_oauth(fb_base_url, effective_key, provider=fb_provider)
+        agent._is_anthropic_oauth = broker_route or anthropic_route_is_oauth(
+            fb_base_url, effective_key, provider=fb_provider)
         agent.client, agent._client_kwargs = None, {}
         return
     agent.api_key = credential
@@ -500,7 +504,9 @@ class ClientLifecycleMixin:
     def _anthropic_oauth_flag(self, token: str) -> bool:
         """OAuth flag only on native Anthropic routes; third-party Anthropic-protocol endpoints must not trip OAuth paths."""
         from agent.anthropic_credentials import anthropic_route_is_oauth
-        return anthropic_route_is_oauth(getattr(self, "_anthropic_base_url", None), token, provider=self.provider)
+        base_url = getattr(self, "_anthropic_base_url", None)
+        return base_url == "claude-broker://local" or anthropic_route_is_oauth(
+            base_url, token, provider=self.provider)
 
     def _build_anthropic_client_for_key(self, key: tuple) -> Any:
         from agent.anthropic_adapter import build_anthropic_bedrock_client, build_anthropic_client
@@ -878,6 +884,10 @@ class ClientLifecycleMixin:
         # Only native Anthropic rotates OAuth tokens; other anthropic_messages providers (MiniMax, Alibaba, ...)
         # and Azure use static keys — a refresh would pick up the ~/.claude OAuth token and break auth.
         anthropic_base_url = getattr(self, "_anthropic_base_url", "") or ""
+        if anthropic_base_url == "claude-broker://local":
+            # Broker owns rotation; reading ~/.claude here would cross the
+            # credential boundary and replace the request's dummy token.
+            return False
         if (
             self.api_mode != "anthropic_messages" or not hasattr(self, "_anthropic_api_key")
             or self.provider != "anthropic" or base_url_host_matches(anthropic_base_url, "azure.com")
