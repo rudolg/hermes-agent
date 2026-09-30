@@ -119,6 +119,19 @@ class _ModelSwitchContext:
 _TEXT_LISTING_MODELS = 5
 
 
+def _with_seat_menu(providers, listing_kwargs: dict):
+    """Same broker and bunker rows the desktop chat menu shows."""
+    from hermes_cli.seat_menu import install_seat_menu
+
+    user_providers = listing_kwargs.get("user_providers")
+    return install_seat_menu(
+        providers,
+        listing_kwargs.get("current_provider") or "",
+        excluded_providers=listing_kwargs.get("excluded_providers"),
+        user_providers=user_providers if isinstance(user_providers, dict) else None,
+    )
+
+
 def _model_provider_listing_lines(providers) -> list[str]:
     """Text-list body for ``/model`` with no args on platforms without a picker."""
     lines: list[str] = []
@@ -428,6 +441,7 @@ class GatewayModelCommandsMixin:
             providers = await asyncio.to_thread(
                 list_picker_providers, max_models=50, include_moa=True, **listing_kwargs
             )
+            providers = _with_seat_menu(providers, listing_kwargs)
         except Exception:
             providers = []
         if not providers:
@@ -480,7 +494,7 @@ class GatewayModelCommandsMixin:
                    provider=get_label(ctx.current_provider)), ""]
         try:  # off-loop: listing still reads config/disk cache synchronously (#41289)
             providers = await asyncio.to_thread(list_authenticated_providers, max_models=_TEXT_LISTING_MODELS, **listing_kwargs)
-            lines.extend(_model_provider_listing_lines(providers))
+            lines.extend(_model_provider_listing_lines(_with_seat_menu(providers, listing_kwargs)))
         except Exception:
             pass
         lines.append(t("gateway.model.usage_switch_model"))

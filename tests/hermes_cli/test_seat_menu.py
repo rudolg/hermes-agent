@@ -194,6 +194,25 @@ def test_disabled_or_excluded_local_seats_do_not_reappear():
     assert [row["slug"] for row in rows] == ["anthropic"]
 
 
+def test_telegram_model_list_uses_the_same_seat_menu():
+    from gateway.slash_commands_model import _with_seat_menu
+
+    rows = [
+        _row("anthropic", "Anthropic", ["claude-opus-5-5", "claude-fable-5"]),
+        _row("openai-codex", "ChatGPT or Codex Subscription", ["gpt-6-astra", "gpt-6-sol", "gpt-6-sol-900k"]),
+        _row("nous", "Nous Portal", ["openai/gpt-6.1-sol-pro"]),
+    ]
+    with patch("hermes_cli.auth.is_provider_explicitly_configured", return_value=True), patch(
+        "hermes_cli.seat_menu.bunker_concrete_models", return_value=["gpt-6-astra", "gpt-6-sol"]
+    ):
+        seated = _with_seat_menu(rows, {"current_provider": "claude-broker", "user_providers": {}})
+    assert [row["slug"] for row in seated[:2]] == ["claude-broker", "codex-bunker"]
+    assert "gpt-6-astra-900k" in seated[1]["models"]
+    assert "gpt-6-sol-900k" in seated[1]["models"]
+    assert "openai/gpt-6.1-sol-pro" not in seated[1]["models"]
+    assert seated[-1]["slug"] == "nous"
+
+
 def test_local_seat_switch_accepts_without_a_network_probe():
     broker = validate_requested_model("opus", "claude-broker", api_mode="anthropic_messages", base_url="claude-broker://local")
     bunker = validate_requested_model("gpt-6-sol", "codex-bunker", base_url="codex-bunker://local")
