@@ -85,7 +85,7 @@ def test_chat_menu_puts_broker_then_bunker_above_other_sources():
 
     bunker = providers[1]
     assert bunker["name"] == "Bunker Codex (bunker accounts)"
-    assert bunker["models"] == ["gpt-5.6-luna", "gpt-6.1-sol", "gpt-6-sol"]
+    assert bunker["models"] == ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-luna"]
     assert "sol" not in bunker["models"]
     assert "astra" not in bunker["models"]
     assert "gpt-6-sol-900k" not in bunker["models"]
@@ -118,13 +118,13 @@ def test_versions_sort_by_name_then_newest_without_the_bare_alias():
     assert broker == [
         "claude-fable-5-1",
         "claude-fable-5",
-        "claude-haiku-4-5-20251001",
         "claude-opus-5-5",
         "claude-opus-5",
         "claude-opus-4-8",
         "claude-opus-4-5",
         "claude-sonnet-4-6",
         "claude-3-7-sonnet-20250219",
+        "claude-haiku-4-5-20251001",
     ]
     assert "opus" not in broker
     assert broker.count("claude-fable-5-1") == 1
@@ -142,11 +142,11 @@ def test_versions_sort_by_name_then_newest_without_the_bare_alias():
         ])
     assert bunker == [
         "gpt-6-astra",
-        "gpt-6-luna",
-        "gpt-5.6-luna",
         "gpt-6.1-sol",
         "gpt-6-sol",
         "gpt-5.6-sol",
+        "gpt-6-luna",
+        "gpt-5.6-luna",
     ]
     assert "sol" not in bunker
 

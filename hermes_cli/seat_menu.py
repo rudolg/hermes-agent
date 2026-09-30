@@ -2,8 +2,9 @@
 
 The desktop chat menu sorts provider groups by display name. These names are
 chosen so that sort puts the broker first and the bunker second, then the
-direct ChatGPT subscription, then every other source. Inside the broker and
-the bunker, rows are concrete versions sorted by name, newest first.
+direct ChatGPT subscription, then every other source. Inside each door the
+rows follow the shelf, then the newest version: Fable, Opus, Sonnet, Haiku,
+and Astra, Sol, Luna, Terra.
 """
 
 from __future__ import annotations
@@ -17,8 +18,10 @@ _BUNKER_SLUG = "codex-bunker"
 _BROKER_NAME = "Anthropic broker (Claude subscription)"
 _BUNKER_NAME = "Bunker Codex (bunker accounts)"
 _SUBSCRIPTION_NAME = "ChatGPT subscription (direct login)"
-_BROKER_ALIASES = ("opus", "fable", "sonnet", "haiku")
-_BUNKER_ALIASES = ("sol", "astra", "luna", "terra")
+_BROKER_ALIASES = ("fable", "opus", "sonnet", "haiku")
+_BUNKER_ALIASES = ("astra", "sol", "luna", "terra")
+_BROKER_RANK = {name: index for index, name in enumerate(_BROKER_ALIASES)}
+_BUNKER_RANK = {name: index for index, name in enumerate(_BUNKER_ALIASES)}
 _CLAUDE_FAMILY = re.compile(
     r"claude-(?:(?:opus|sonnet|haiku|fable)-[0-9]{1,8}(?:-[0-9]{1,8}){0,4}"
     r"|[0-9]-[0-9]-(?:opus|sonnet|haiku)-[0-9]{8})\Z"
@@ -68,11 +71,13 @@ def _claude_candidate(model: str) -> tuple[str, tuple[int, ...], bool, str] | No
     return legacy.group(3), (int(legacy.group(1)), int(legacy.group(2))), False, name
 
 
-def _sorted_versions(chosen: dict[tuple[str, tuple[int, ...]], str]) -> list[str]:
-    """Family name, then newest version. Opus 5.5 comes before Opus 5 and Opus 4.8."""
-    def key(item: tuple[str, tuple[int, ...]]) -> tuple[str, tuple[int, ...]]:
+def _sorted_versions(
+    chosen: dict[tuple[str, tuple[int, ...]], str], rank: dict[str, int],
+) -> list[str]:
+    """Shelf order, then newest version. Opus 5.5 comes before Opus 5 and Opus 4.8."""
+    def key(item: tuple[str, tuple[int, ...]]) -> tuple[int, tuple[int, ...]]:
         version = item[1] + (0,) * (6 - len(item[1]))
-        return item[0], tuple(-part for part in version)
+        return rank.get(item[0], len(rank)), tuple(-part for part in version)
 
     return [chosen[item] for item in sorted(chosen, key=key)]
 
@@ -91,7 +96,7 @@ def broker_menu_models(claude_ids: list[str] | None = None) -> list[str]:
             chosen[key] = (undated, emit)
     if not chosen:
         return list(_BROKER_ALIASES)
-    return _sorted_versions({key: emit for key, (_, emit) in chosen.items()})
+    return _sorted_versions({key: emit for key, (_, emit) in chosen.items()}, _BROKER_RANK)
 
 
 def bunker_concrete_models() -> list[str]:
@@ -127,7 +132,7 @@ def bunker_menu_models(subscription_ids: list[str] | None = None) -> list[str]:
         chosen.setdefault((match.group(3), (int(match.group(1)), int(match.group(2) or 0))), ident)
     if not chosen:
         return list(_BUNKER_ALIASES)
-    return _sorted_versions(chosen)
+    return _sorted_versions(chosen, _BUNKER_RANK)
 
 
 def _seat_row(slug: str, name: str, models: list[str], current: str, auth_type: str) -> dict:
