@@ -63,6 +63,51 @@ def test_tool_call_round_trip_uses_one_native_bunker_thread(tmp_path):
         client.close()
 
 
+def test_900k_pick_opens_the_base_and_keeps_one_session(tmp_path):
+    opened = tmp_path / "opened.txt"
+    script = tmp_path / "bridge.py"
+    script.write_text(
+        "import json, sys\n"
+        "for line in sys.stdin:\n"
+        "    row = json.loads(line)\n"
+        "    if row['op'] == 'open':\n"
+        f"        open({json.dumps(str(opened))}, 'a').write(row['model'] + '\\n')\n"
+        "        result = {'session': 'wide', 'thread_id': 't'}\n"
+        "    elif row['op'] == 'send':\n"
+        "        result = {'type': 'final', 'content': 'ok'}\n"
+        "    else:\n"
+        "        result = {'closed': True}\n"
+        "    print(json.dumps({'id': row['id'], 'ok': True, **result}), flush=True)\n"
+    )
+    agent = SimpleNamespace(session_cwd=str(tmp_path), session_id="hermes-test")
+    client = CodexBunkerClient(
+        agent,
+        process_factory=lambda _cmd, **kw: subprocess.Popen([sys.executable, str(script)], **kw),
+        bridge_path=script,
+    )
+    try:
+        client.create(model="gpt-6-astra-900k", tools=[], messages=[{"role": "user", "content": "wide"}])
+        client.create(model="gpt-6-astra-900k", tools=[], messages=[{"role": "user", "content": "again"}])
+        client.close()
+        client.create(model="gpt-6.1-sol-900k", tools=[], messages=[{"role": "user", "content": "no bump"}])
+    finally:
+        client.close()
+    assert opened.read_text().splitlines() == ["gpt-6-astra", "gpt-6.1-sol-900k"]
+
+
+def test_bunker_context_window_follows_the_900k_opt_in():
+    from agent.model_metadata import get_model_context_length
+
+    assert get_model_context_length(
+        "gpt-6-astra", provider="codex-bunker", base_url="codex-bunker://local") == 272_000
+    assert get_model_context_length(
+        "gpt-6-astra-900k", provider="codex-bunker", base_url="codex-bunker://local") == 900_000
+    assert get_model_context_length(
+        "gpt-6-sol-900k", provider="codex-bunker", base_url="codex-bunker://local") == 900_000
+    assert get_model_context_length(
+        "gpt-6.1-sol", provider="codex-bunker", base_url="codex-bunker://local") == 272_000
+
+
 def test_wrong_tool_result_never_reaches_bunker(tmp_path):
     script = tmp_path / "bridge.py"
     script.write_text(BRIDGE)

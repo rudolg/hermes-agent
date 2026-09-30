@@ -151,9 +151,13 @@ class CodexBunkerClient:
             render_history_seed(messages),
         ) if part)
         try:
+            from agent.model_metadata import strip_codex_context_variant_suffix
+            # ``-900k`` is a Hermes context opt-in. The bunker routes the base slug;
+            # the session keeps the suffixed id so the larger window still applies.
             row = self._request({"op": "open", "cwd": str(getattr(self.agent, "session_cwd", None)
                                                        or resolve_agent_cwd()),
-                                 "model": kwargs["model"], "tools": self.tool_specs,
+                                 "model": strip_codex_context_variant_suffix(kwargs["model"]),
+                                 "tools": self.tool_specs,
                                  "reason_code": "DEFAULT",
                                  "job_id": str(getattr(self.agent, "session_id", None) or uuid.uuid4()),
                                  "developer_instructions": instructions})

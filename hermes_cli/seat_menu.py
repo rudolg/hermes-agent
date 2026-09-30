@@ -4,7 +4,8 @@ The desktop chat menu sorts provider groups by display name. These names are
 chosen so that sort puts the broker first and the bunker second, then the
 direct ChatGPT subscription, then every other source. Inside each door the
 rows follow the shelf, then the newest version: Fable, Opus, Sonnet, Haiku,
-and Astra, Sol, Luna, Terra.
+and Astra, Sol, Luna, Terra. A verified Codex ``-900k`` row sits immediately
+under its base. It is the same model with the larger context window.
 """
 
 from __future__ import annotations
@@ -50,7 +51,15 @@ def seat_accepts(provider: str, model: str) -> bool:
     if slug == _BROKER_SLUG:
         return name in _BROKER_ALIASES or _CLAUDE_FAMILY.fullmatch(name) is not None
     if slug == _BUNKER_SLUG:
-        return name in _BUNKER_ALIASES or _CODEX_FAMILY.fullmatch(name) is not None
+        if name in _BUNKER_ALIASES or _CODEX_FAMILY.fullmatch(name) is not None:
+            return True
+        from agent.model_metadata import (
+            is_codex_context_variant,
+            strip_codex_context_variant_suffix,
+        )
+        if not is_codex_context_variant(name):
+            return False
+        return _CODEX_FAMILY.fullmatch(strip_codex_context_variant_suffix(name)) is not None
     return False
 
 
@@ -114,13 +123,34 @@ def bunker_concrete_models() -> list[str]:
 
 
 def _codex_identity(model: str) -> str | None:
-    """Undated family id, or None for spark, 900k, pro, and anything else the bunker does not serve."""
-    name = _DATE_TAIL.sub("", str(model).strip())
+    """Undated family id. A ``-900k`` picker suffix and a date pin collapse onto that id.
+
+    Spark, ``-pro``, and anything else outside the four bunker families stay off this door.
+    """
+    name = str(model).strip()
+    if name.endswith("-900k"):
+        name = name[:-5]
+    name = _DATE_TAIL.sub("", name)
     return name if _CODEX_FAMILY.fullmatch(name) else None
 
 
+def _with_context_variants(models: list[str]) -> list[str]:
+    """Place each verified large-context alias directly under its base slug."""
+    from agent.model_metadata import CODEX_CONTEXT_VARIANT_SUFFIX, has_codex_context_variant
+
+    listed: list[str] = []
+    for model in models:
+        listed.append(model)
+        if has_codex_context_variant(model):
+            listed.append(model + CODEX_CONTEXT_VARIANT_SUFFIX)
+    return listed
+
+
 def bunker_menu_models(subscription_ids: list[str] | None = None) -> list[str]:
-    """Every bunker family version, by name then version. Subscription-only ids such as gpt-6.1-sol join this door."""
+    """Every bunker family version, by name then version. Subscription-only ids such as gpt-6.1-sol join this door.
+
+    Eligible bases also get their ``-900k`` row. ``gpt-6.1-sol`` has no verified large-context alias.
+    """
     chosen: dict[tuple[str, tuple[int, int]], str] = {}
     for model in [*bunker_concrete_models(), *(subscription_ids or [])]:
         ident = _codex_identity(str(model))
@@ -132,7 +162,7 @@ def bunker_menu_models(subscription_ids: list[str] | None = None) -> list[str]:
         chosen.setdefault((match.group(3), (int(match.group(1)), int(match.group(2) or 0))), ident)
     if not chosen:
         return list(_BUNKER_ALIASES)
-    return _sorted_versions(chosen, _BUNKER_RANK)
+    return _with_context_variants(_sorted_versions(chosen, _BUNKER_RANK))
 
 
 def _seat_row(slug: str, name: str, models: list[str], current: str, auth_type: str) -> dict:

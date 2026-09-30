@@ -2248,6 +2248,12 @@ def get_model_context_length(
     context = profile.get_model_context_length(model) if profile else None
     if type(context) is int and context > 0:
         return context
+    # The bunker spends Codex subscription accounts. Their window is the OAuth
+    # table (272K, or the verified ~900K opt-in), not the direct-API 1.05M default.
+    if (provider or "").strip().lower() == "codex-bunker":
+        bunker_ctx, _bunker_source = _resolve_codex_oauth_context_length_with_source(model)
+        if bunker_ctx:
+            return bunker_ctx
     is_bedrock_context = _is_bedrock_context(base_url, provider)
     # A Codex Responses route is keyed on its transport, not its host: behind a proxy
     # (HERMES_CODEX_BASE_URL, model.base_url, custom api_mode: codex_responses) the URL looks

@@ -85,10 +85,16 @@ def test_chat_menu_puts_broker_then_bunker_above_other_sources():
 
     bunker = providers[1]
     assert bunker["name"] == "Bunker Codex (bunker accounts)"
-    assert bunker["models"] == ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-luna"]
+    assert bunker["models"] == [
+        "gpt-6.1-sol",
+        "gpt-6-sol",
+        "gpt-6-sol-900k",
+        "gpt-5.6-luna",
+        "gpt-5.6-luna-900k",
+    ]
     assert "sol" not in bunker["models"]
     assert "astra" not in bunker["models"]
-    assert "gpt-6-sol-900k" not in bunker["models"]
+    assert "gpt-6.1-sol-900k" not in bunker["models"]
     assert "gpt-5.3-codex-spark" not in bunker["models"]
     assert "gpt-6.1-sol-pro" not in bunker["models"]
 
@@ -142,13 +148,19 @@ def test_versions_sort_by_name_then_newest_without_the_bare_alias():
         ])
     assert bunker == [
         "gpt-6-astra",
+        "gpt-6-astra-900k",
         "gpt-6.1-sol",
         "gpt-6-sol",
+        "gpt-6-sol-900k",
         "gpt-5.6-sol",
+        "gpt-5.6-sol-900k",
         "gpt-6-luna",
+        "gpt-6-luna-900k",
         "gpt-5.6-luna",
+        "gpt-5.6-luna-900k",
     ]
     assert "sol" not in bunker
+    assert "gpt-6.1-sol-900k" not in bunker
 
 
 def test_seat_accepts_broker_and_bunker_ids_only():
@@ -162,8 +174,10 @@ def test_seat_accepts_broker_and_bunker_ids_only():
     assert seat_accepts("codex-bunker", "gpt-6-sol")
     assert seat_accepts("codex-bunker", "gpt-6.1-sol")
     assert seat_accepts("codex-bunker", "gpt-5.6-terra")
+    assert seat_accepts("codex-bunker", "gpt-6-sol-900k")
+    assert seat_accepts("codex-bunker", "gpt-6-astra-900k")
     assert not seat_accepts("codex-bunker", "gpt-6.1-sol-pro")
-    assert not seat_accepts("codex-bunker", "gpt-6-sol-900k")
+    assert not seat_accepts("codex-bunker", "gpt-6.1-sol-900k")
     assert not seat_accepts("codex-bunker", "gpt-5.3-codex-spark")
     assert not seat_accepts("openai-codex", "gpt-6-sol")
 
@@ -184,10 +198,12 @@ def test_local_seat_switch_accepts_without_a_network_probe():
     broker = validate_requested_model("opus", "claude-broker", api_mode="anthropic_messages", base_url="claude-broker://local")
     bunker = validate_requested_model("gpt-6-sol", "codex-bunker", base_url="codex-bunker://local")
     newer = validate_requested_model("gpt-6.1-sol", "codex-bunker", base_url="codex-bunker://local")
-    rejected = validate_requested_model("gpt-6-sol-900k", "codex-bunker", base_url="codex-bunker://local")
+    wide = validate_requested_model("gpt-6-astra-900k", "codex-bunker", base_url="codex-bunker://local")
+    rejected = validate_requested_model("gpt-6.1-sol-900k", "codex-bunker", base_url="codex-bunker://local")
     assert broker["accepted"] is True
     assert broker["message"] in (None, "")
     assert bunker["accepted"] is True
     assert newer["accepted"] is True
+    assert wide["accepted"] is True
     assert rejected["accepted"] is False
     assert "Bunker Codex" in rejected["message"]
