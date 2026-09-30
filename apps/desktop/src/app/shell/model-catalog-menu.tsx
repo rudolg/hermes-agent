@@ -997,6 +997,14 @@ function DownloadingModelRow({
   )
 }
 
+const SEAT_MENU_ORDER = ['claude-broker', 'codex-bunker']
+
+function seatMenuRank(slug: string): number {
+  const index = SEAT_MENU_ORDER.indexOf(slug.toLowerCase())
+
+  return index === -1 ? SEAT_MENU_ORDER.length : index
+}
+
 // Collapsed we show the user's chosen models (or the curated default); typing
 // spans every available model so anything is reachable past the cut. A search
 // is itself a narrowing action, so we do NOT cap per-provider matches.
@@ -1051,9 +1059,14 @@ function groupModels(
     }
   }
 
-  // Stable, logical group order: alphabetical by provider name. (The backend
-  // floats the current provider first, which would reshuffle on every switch.)
-  groups.sort((a, b) => a.provider.name.localeCompare(b.provider.name))
+  // The broker and the bunker stay above every other source. The rest stay
+  // alphabetical. (The backend floats the current provider first, which would
+  // reshuffle on every switch.)
+  groups.sort((a, b) => {
+    const rank = seatMenuRank(a.provider.slug) - seatMenuRank(b.provider.slug)
+
+    return rank || a.provider.name.localeCompare(b.provider.name)
+  })
 
   return groups
 }

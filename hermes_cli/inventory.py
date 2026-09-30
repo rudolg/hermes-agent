@@ -161,6 +161,13 @@ def build_models_payload(
     from hermes_cli.models_validate import drop_unofferable_model_ids
 
     drop_unofferable_model_ids(rows)
+    from hermes_cli.seat_menu import install_seat_menu
+
+    rows = install_seat_menu(
+        rows, ctx.current_provider,
+        excluded_providers=ctx.excluded_providers,
+        user_providers=ctx.user_providers,
+    )
 
     return {"providers": rows, "model": ctx.current_model, "provider": ctx.current_provider}
 

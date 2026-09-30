@@ -757,6 +757,9 @@ def test_picker_metadata_uses_one_config_read_for_real_models_dev_lookups(tmp_pa
 
         with (
             _list_auth_returning(_rows(model_ids)),
+            # This count is the metadata path. The seat menu asks whether the
+            # broker and bunker are configured; keep that off so it is not a read.
+            patch("hermes_cli.auth.is_provider_explicitly_configured", return_value=False),
             patch("hermes_cli.inventory._local_runtime_row", return_value=None),
             patch("hermes_cli.inventory._moa_provider_row", return_value=None),
             patch("hermes_cli.models.model_supports_fast_mode", return_value=False),

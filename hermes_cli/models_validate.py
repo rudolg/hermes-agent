@@ -752,14 +752,25 @@ def _for(*providers: str) -> Callable[[_Request], bool]:
     return lambda req: req.normalized in providers
 
 
+def _validate_local_seat(req: _Request) -> dict[str, Any]:
+    """Broker and bunker ids are accepted locally. Do not probe their socket URLs."""
+    from hermes_cli.seat_menu import seat_accepts
+
+    if seat_accepts(req.normalized, req.requested):
+        return _accept()
+    label = "Anthropic broker" if req.normalized == "claude-broker" else "Bunker Codex"
+    return _reject(f"`{req.requested}` is not served by the {label}.")
+
+
 # (gate, branch): the branch runs when the gate passes; the first non-None verdict wins. ORDER IS
 # BEHAVIOR: moa → whitespace (skipped only for self-hosted providers and a user-configured
-# base_url) → OpenRouter preset parse → LM Studio → Ollama native → custom →
+# base_url) → local broker/bunker → OpenRouter preset parse → LM Studio → Ollama native → custom →
 # codex/xai static → MiniMax → managed local (staged library) → Anthropic native →
 # Anthropic Messages → external process → live listing → Bedrock → curated-catalog fallback (always decides).
 _LADDER: tuple[tuple[Callable[[_Request], bool], Callable[[_Request], Optional[dict[str, Any]]]], ...] = (
     (_for("moa"), _validate_moa),
     (lambda req: True, _reject_whitespace),
+    (_for("claude-broker", "codex-bunker"), _validate_local_seat),
     (_for("openrouter"), _parse_openrouter_preset),
     (_for("lmstudio"), _validate_lmstudio),
     (lambda req: True, _validate_ollama_native),
