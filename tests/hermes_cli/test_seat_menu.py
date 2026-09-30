@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from hermes_cli.inventory import ConfigContext, build_models_payload
 from hermes_cli.models_validate import validate_requested_model
-from hermes_cli.seat_menu import seat_accepts
+from hermes_cli.seat_menu import broker_menu_models, bunker_menu_models, seat_accepts
 
 
 def _ctx():
@@ -33,7 +33,18 @@ def _row(slug, name, models, **extra):
 def test_chat_menu_puts_broker_then_bunker_above_other_sources():
     rows = [
         _row("anthropic", "Anthropic", ["claude-opus-4-6", "claude-sonnet-4-6", "not-claude"]),
-        _row("openai-codex", "ChatGPT or Codex Subscription", ["gpt-6-sol", "gpt-5.3-codex-spark"]),
+        _row(
+            "openai-codex",
+            "ChatGPT or Codex Subscription",
+            [
+                "gpt-6-sol",
+                "gpt-6.1-sol",
+                "gpt-6.1-sol-20260929",
+                "gpt-6.1-sol-pro",
+                "gpt-6-sol-900k",
+                "gpt-5.3-codex-spark",
+            ],
+        ),
         _row(
             "custom",
             "Codex Sol",
@@ -65,22 +76,79 @@ def test_chat_menu_puts_broker_then_bunker_above_other_sources():
     assert "anthropic" not in [row["slug"] for row in providers]
 
     broker = providers[0]
-    assert broker["name"] == "Anthropic broker"
+    assert broker["name"] == "Anthropic broker (Claude subscription)"
     assert broker["is_current"] is True
-    assert broker["models"][:4] == ["opus", "fable", "sonnet", "haiku"]
-    assert "claude-opus-4-6" in broker["models"]
-    assert "claude-sonnet-4-6" in broker["models"]
+    assert broker["models"] == ["claude-opus-4-6", "claude-sonnet-4-6"]
+    assert "opus" not in broker["models"]
+    assert "fable" not in broker["models"]
     assert "not-claude" not in broker["models"]
 
     bunker = providers[1]
-    assert bunker["name"] == "Bunker Codex"
-    assert bunker["models"][:4] == ["sol", "astra", "luna", "terra"]
-    assert bunker["models"][4:] == ["gpt-6-sol", "gpt-5.6-luna"]
+    assert bunker["name"] == "Bunker Codex (bunker accounts)"
+    assert bunker["models"] == ["gpt-5.6-luna", "gpt-6.1-sol", "gpt-6-sol"]
+    assert "sol" not in bunker["models"]
+    assert "astra" not in bunker["models"]
+    assert "gpt-6-sol-900k" not in bunker["models"]
+    assert "gpt-5.3-codex-spark" not in bunker["models"]
+    assert "gpt-6.1-sol-pro" not in bunker["models"]
 
     names = {row["slug"]: row["name"] for row in providers}
-    assert names["openai-codex"] == "ChatGPT subscription"
+    assert names["openai-codex"] == "ChatGPT subscription (direct login)"
     assert names["custom"] == "Codex loopback"
     assert names["nous"] == "Nous Portal"
+    assert [row["slug"] for row in providers] == ["claude-broker", "codex-bunker", "openai-codex", "custom", "nous"]
+
+
+def test_versions_sort_by_name_then_newest_without_the_bare_alias():
+    broker = broker_menu_models([
+        "claude-opus-5",
+        "claude-opus-5-5",
+        "claude-opus-4-8",
+        "claude-opus-4-5",
+        "claude-opus-4-5-20251101",
+        "claude-fable-5",
+        "claude-fable-5-1",
+        "claude-fable-5.1",
+        "claude-sonnet-4-6",
+        "claude-3-7-sonnet-20250219",
+        "claude-haiku-4-5-20251001",
+        "not-claude",
+        "opus",
+    ])
+    assert broker == [
+        "claude-fable-5-1",
+        "claude-fable-5",
+        "claude-haiku-4-5-20251001",
+        "claude-opus-5-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-opus-4-5",
+        "claude-sonnet-4-6",
+        "claude-3-7-sonnet-20250219",
+    ]
+    assert "opus" not in broker
+    assert broker.count("claude-fable-5-1") == 1
+
+    with patch(
+        "hermes_cli.seat_menu.bunker_concrete_models",
+        return_value=["gpt-6-sol", "gpt-6-astra", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-sol-900k"],
+    ):
+        bunker = bunker_menu_models([
+            "gpt-6.1-sol",
+            "gpt-6.1-sol-pro",
+            "gpt-6-luna-20260929",
+            "gpt-5.3-codex-spark",
+            "sol",
+        ])
+    assert bunker == [
+        "gpt-6-astra",
+        "gpt-6-luna",
+        "gpt-5.6-luna",
+        "gpt-6.1-sol",
+        "gpt-6-sol",
+        "gpt-5.6-sol",
+    ]
+    assert "sol" not in bunker
 
 
 def test_seat_accepts_broker_and_bunker_ids_only():
@@ -92,7 +160,9 @@ def test_seat_accepts_broker_and_bunker_ids_only():
     assert not seat_accepts("claude-broker", "gpt-6-sol")
     assert seat_accepts("codex-bunker", "sol")
     assert seat_accepts("codex-bunker", "gpt-6-sol")
+    assert seat_accepts("codex-bunker", "gpt-6.1-sol")
     assert seat_accepts("codex-bunker", "gpt-5.6-terra")
+    assert not seat_accepts("codex-bunker", "gpt-6.1-sol-pro")
     assert not seat_accepts("codex-bunker", "gpt-6-sol-900k")
     assert not seat_accepts("codex-bunker", "gpt-5.3-codex-spark")
     assert not seat_accepts("openai-codex", "gpt-6-sol")
@@ -113,9 +183,11 @@ def test_disabled_or_excluded_local_seats_do_not_reappear():
 def test_local_seat_switch_accepts_without_a_network_probe():
     broker = validate_requested_model("opus", "claude-broker", api_mode="anthropic_messages", base_url="claude-broker://local")
     bunker = validate_requested_model("gpt-6-sol", "codex-bunker", base_url="codex-bunker://local")
+    newer = validate_requested_model("gpt-6.1-sol", "codex-bunker", base_url="codex-bunker://local")
     rejected = validate_requested_model("gpt-6-sol-900k", "codex-bunker", base_url="codex-bunker://local")
     assert broker["accepted"] is True
     assert broker["message"] in (None, "")
     assert bunker["accepted"] is True
+    assert newer["accepted"] is True
     assert rejected["accepted"] is False
     assert "Bunker Codex" in rejected["message"]

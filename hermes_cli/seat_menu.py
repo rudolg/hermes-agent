@@ -1,9 +1,9 @@
 """Chat-menu rows for the local Claude broker and Codex bunker.
 
 The desktop chat menu sorts provider groups by display name. These names are
-chosen so that sort puts the broker first and the bunker second, above every
-other source: "Anthropic broker", then "Bunker Codex", then "ChatGPT
-subscription" and the rest.
+chosen so that sort puts the broker first and the bunker second, then the
+direct ChatGPT subscription, then every other source. Inside the broker and
+the bunker, rows are concrete versions sorted by name, newest first.
 """
 
 from __future__ import annotations
@@ -14,16 +14,20 @@ from pathlib import Path
 
 _BROKER_SLUG = "claude-broker"
 _BUNKER_SLUG = "codex-bunker"
-_BROKER_NAME = "Anthropic broker"
-_BUNKER_NAME = "Bunker Codex"
+_BROKER_NAME = "Anthropic broker (Claude subscription)"
+_BUNKER_NAME = "Bunker Codex (bunker accounts)"
+_SUBSCRIPTION_NAME = "ChatGPT subscription (direct login)"
 _BROKER_ALIASES = ("opus", "fable", "sonnet", "haiku")
 _BUNKER_ALIASES = ("sol", "astra", "luna", "terra")
-_FAMILY_ORDER = {"sol": 0, "astra": 1, "luna": 2, "terra": 3}
 _CLAUDE_FAMILY = re.compile(
     r"claude-(?:(?:opus|sonnet|haiku|fable)-[0-9]{1,8}(?:-[0-9]{1,8}){0,4}"
     r"|[0-9]-[0-9]-(?:opus|sonnet|haiku)-[0-9]{8})\Z"
 )
+_MODERN_CLAUDE = re.compile(r"claude-(opus|sonnet|haiku|fable)-(\d+(?:-\d+){0,4})\Z")
+_LEGACY_CLAUDE = re.compile(r"claude-(\d+)-(\d+)-(opus|sonnet|haiku)-(\d{8})\Z")
 _CODEX_FAMILY = re.compile(r"gpt-(\d+)(?:\.(\d+))?-(sol|luna|astra|terra)\Z")
+_DATE_TAIL = re.compile(r"-\d{8}\Z")
+_DOT_VERSION = re.compile(r"(?<=\d)\.(?=\d)")
 _MONITORED_MODELS = re.compile(r"^MONITORED_MODEL_IDS = \((.*?)\)", re.M | re.S)
 _QUOTED = re.compile(r"""['"]([^'"]+)['"]""")
 _FALLBACK_BUNKER_MODELS = (
@@ -47,16 +51,47 @@ def seat_accepts(provider: str, model: str) -> bool:
     return False
 
 
+def _claude_candidate(model: str) -> tuple[str, tuple[int, ...], bool, str] | None:
+    """Family, version, undated flag, and the id to list. A date pin is not a version."""
+    name = _DOT_VERSION.sub("-", str(model).strip())
+    modern = _MODERN_CLAUDE.fullmatch(name)
+    if modern:
+        parts = [int(part) for part in modern.group(2).split("-")]
+        dated = len(parts) >= 2 and len(str(parts[-1])) == 8
+        version = tuple(parts[:-1] if dated else parts)
+        if not version:
+            return None
+        return modern.group(1), version, not dated, name
+    legacy = _LEGACY_CLAUDE.fullmatch(name)
+    if legacy is None:
+        return None
+    return legacy.group(3), (int(legacy.group(1)), int(legacy.group(2))), False, name
+
+
+def _sorted_versions(chosen: dict[tuple[str, tuple[int, ...]], str]) -> list[str]:
+    """Family name, then newest version. Opus 5.5 comes before Opus 5 and Opus 4.8."""
+    def key(item: tuple[str, tuple[int, ...]]) -> tuple[str, tuple[int, ...]]:
+        version = item[1] + (0,) * (6 - len(item[1]))
+        return item[0], tuple(-part for part in version)
+
+    return [chosen[item] for item in sorted(chosen, key=key)]
+
+
 def broker_menu_models(claude_ids: list[str] | None = None) -> list[str]:
-    """Family aliases first (newest of that class), then exact Claude ids."""
-    models = list(_BROKER_ALIASES)
-    seen = set(models)
+    """Every concrete Claude version, by name then version. No bare alias beside them."""
+    chosen: dict[tuple[str, tuple[int, ...]], tuple[bool, str]] = {}
     for model in claude_ids or []:
-        if model in seen or _CLAUDE_FAMILY.fullmatch(str(model)) is None:
+        parsed = _claude_candidate(str(model))
+        if parsed is None:
             continue
-        models.append(str(model))
-        seen.add(model)
-    return models
+        family, version, undated, emit = parsed
+        key = (family, version)
+        current = chosen.get(key)
+        if current is None or (undated and not current[0]):
+            chosen[key] = (undated, emit)
+    if not chosen:
+        return list(_BROKER_ALIASES)
+    return _sorted_versions({key: emit for key, (_, emit) in chosen.items()})
 
 
 def bunker_concrete_models() -> list[str]:
@@ -73,32 +108,26 @@ def bunker_concrete_models() -> list[str]:
     return found or list(_FALLBACK_BUNKER_MODELS)
 
 
-def _newest_first(models: list[str]) -> list[str]:
-    def key(model: str) -> tuple[int, int, int, str]:
-        match = _CODEX_FAMILY.fullmatch(model)
-        if match is None:
-            return (0, 0, 9, model)
-        return (
-            -int(match.group(1)),
-            -int(match.group(2) or 0),
-            _FAMILY_ORDER.get(match.group(3), 9),
-            model,
-        )
-
-    return sorted(models, key=key)
+def _codex_identity(model: str) -> str | None:
+    """Undated family id, or None for spark, 900k, pro, and anything else the bunker does not serve."""
+    name = _DATE_TAIL.sub("", str(model).strip())
+    return name if _CODEX_FAMILY.fullmatch(name) else None
 
 
-def bunker_menu_models() -> list[str]:
-    """Class aliases first, then the bunker's own concrete ids, newest first."""
-    concrete = _newest_first([model for model in bunker_concrete_models() if _CODEX_FAMILY.fullmatch(model)])
-    models = list(_BUNKER_ALIASES)
-    seen = set(models)
-    for model in concrete:
-        if model in seen:
+def bunker_menu_models(subscription_ids: list[str] | None = None) -> list[str]:
+    """Every bunker family version, by name then version. Subscription-only ids such as gpt-6.1-sol join this door."""
+    chosen: dict[tuple[str, tuple[int, int]], str] = {}
+    for model in [*bunker_concrete_models(), *(subscription_ids or [])]:
+        ident = _codex_identity(str(model))
+        if ident is None:
             continue
-        models.append(model)
-        seen.add(model)
-    return models
+        match = _CODEX_FAMILY.fullmatch(ident)
+        if match is None:
+            continue
+        chosen.setdefault((match.group(3), (int(match.group(1)), int(match.group(2) or 0))), ident)
+    if not chosen:
+        return list(_BUNKER_ALIASES)
+    return _sorted_versions(chosen)
 
 
 def _seat_row(slug: str, name: str, models: list[str], current: str, auth_type: str) -> dict:
@@ -118,7 +147,7 @@ def _seat_row(slug: str, name: str, models: list[str], current: str, auth_type: 
 def _relabel_other_sources(row: dict) -> None:
     slug = str(row.get("slug") or "").strip().lower()
     if slug == "openai-codex":
-        row["name"] = "ChatGPT subscription"
+        row["name"] = _SUBSCRIPTION_NAME
         return
     url = str(row.get("api_url") or "")
     if ":8765" in url and ("127.0.0.1" in url or "localhost" in url):
@@ -148,10 +177,14 @@ def install_seat_menu(
             not isinstance(entry, dict) or is_provider_enabled(entry))
 
     claude_ids: list[str] = []
+    subscription_ids: list[str] = []
     for row in rows:
-        if str(row.get("slug") or "").strip().lower() == "anthropic":
-            claude_ids = [str(model) for model in (row.get("models") or [])]
-            break
+        slug = str(row.get("slug") or "").strip().lower()
+        models = [str(model) for model in (row.get("models") or [])]
+        if slug == "anthropic":
+            claude_ids = models
+        elif slug == "openai-codex" and not subscription_ids:
+            subscription_ids = models
 
     seat: list[dict] = []
     if seat_enabled(_BROKER_SLUG) and is_provider_explicitly_configured(_BROKER_SLUG):
@@ -159,7 +192,7 @@ def install_seat_menu(
             _BROKER_SLUG, _BROKER_NAME, broker_menu_models(claude_ids), current, "local_broker"))
     if seat_enabled(_BUNKER_SLUG) and is_provider_explicitly_configured(_BUNKER_SLUG):
         seat.append(_seat_row(
-            _BUNKER_SLUG, _BUNKER_NAME, bunker_menu_models(), current, "local_bunker"))
+            _BUNKER_SLUG, _BUNKER_NAME, bunker_menu_models(subscription_ids), current, "local_bunker"))
     if not seat:
         return rows
 
