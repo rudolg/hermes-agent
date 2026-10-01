@@ -137,10 +137,27 @@ def _parse_boolish(value: Any, default: bool = True) -> bool:
     return default
 
 
+def mcp_server_scoped_out_of_gateway(cfg: dict) -> bool:
+    """True when ``mcp_servers.<name>.gateway`` is false AND this process is the messaging gateway.
+
+    The gateway marks itself with ``_HERMES_GATEWAY=1`` at import (gateway/run.py); the desktop backend,
+    the CLI and ``hermes mcp`` never carry it. Owner's rule (2026-10-01): a TradingView chart lane has ONE
+    controller claim, and the desktop app's chats are its driver — so the gateway must not spawn a competing
+    server for an entry marked ``gateway: false``. Absent, ``null`` or unparseable ``gateway`` = in scope.
+    """
+    if os.environ.get("_HERMES_GATEWAY") != "1":
+        return False
+    return not _parse_boolish(cfg.get("gateway", True), default=True)
+
+
 def mcp_server_enabled(cfg: dict) -> bool:
     """Whether ``mcp_servers.<name>`` is on. The ONE reader of the ``enabled`` key: the MCP client,
     the toolset resolver, the profile editor, and every list/status surface call it, so a value
-    can never be on for one surface and off for another. Absent, ``null`` or unparseable = on."""
+    can never be on for one surface and off for another. Absent, ``null`` or unparseable = on.
+    Inside the messaging gateway an entry marked ``gateway: false`` is off whatever ``enabled`` says
+    (see :func:`mcp_server_scoped_out_of_gateway`)."""
+    if mcp_server_scoped_out_of_gateway(cfg):
+        return False
     return _parse_boolish(cfg.get("enabled", True), default=True)
 
 
