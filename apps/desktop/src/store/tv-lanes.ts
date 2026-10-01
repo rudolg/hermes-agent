@@ -97,7 +97,7 @@ export function resolveTvLane(
   const where = source === 'session' ? 'this chat' : source === 'workspace' ? 'this tree' : 'the CLI tree'
 
   if (!lane) {
-    return { detail: `${where} is bound to lane ${laneId}, which is no longer in the registry`, lane: null, laneId, source, state: 'conflict' }
+    return { detail: `${where} is bound to lane ${laneId}, which is no longer in the registry: unlink it or recreate the lane`, lane: null, laneId, source, state: 'conflict' }
   }
 
   const name = `${lane.label} (${laneId}${lane.policy ? `, ${lane.policy}` : ''})`
@@ -111,7 +111,7 @@ export function resolveTvLane(
   }
 
   if (lane.claimState === 'held' && lane.holderApp !== null && lane.holderApp !== 'hermes') {
-    return { detail: `${name} is driven by ${lane.holderApp === 'claude' ? 'a Claude window' : 'another process'} (pid ${lane.holderPid}), not Hermes`, lane, laneId, source, state: 'conflict' }
+    return { detail: `${name} is held by ${lane.holderApp === 'claude' ? 'a Claude window' : 'another process'} (pid ${lane.holderPid}): one chart never has two drivers, so this binding is a fault; release the lane there first`, lane, laneId, source, state: 'conflict' }
   }
 
   if (snapshot.snapshotAgeS === null || snapshot.snapshotAgeS > STALE_AFTER_S) {

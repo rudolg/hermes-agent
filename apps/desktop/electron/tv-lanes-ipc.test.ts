@@ -155,7 +155,16 @@ describe('registerTvLanesIpc', () => {
     fs.mkdirSync(ws)
     fs.writeFileSync(path.join(ws, '.mcp.json'), JSON.stringify({ mcpServers: { tradingview: { env: { TV_CDP_CHANNEL: 'atlas' } } } }))
     const now = () => Date.parse('2026-10-01T09:54:09.732Z')
-    registerTvLanesIpc({ homeDir: home, now, readProcess: async () => null })
+
+    // the status fixture: `atlas` held by pid 11658 (a Claude window), `hermes-atlas` by pid 92998 (this app)
+    const chain: Record<number, { command: string; ppid: number }> = {
+      11658: { command: '/opt/homebrew/bin/node src/server.js', ppid: 11600 },
+      11600: { command: '/usr/local/bin/claude', ppid: 1 },
+      92998: { command: '/opt/homebrew/bin/node src/server.js', ppid: 92000 },
+      92000: { command: '/Applications/Hermes.app/Contents/MacOS/Hermes', ppid: 1 }
+    }
+
+    registerTvLanesIpc({ homeDir: home, now, readProcess: async pid => chain[pid] ?? null })
     const get = electron.handlers.get('hermes:tv-lanes:get')!
     const bind = electron.handlers.get('hermes:tv-lanes:bind')!
 
@@ -163,6 +172,11 @@ describe('registerTvLanesIpc', () => {
     expect(first).toMatchObject({ declared: { [ws]: 'atlas' }, ok: true, snapshotAgeS: 60 })
 
     expect(await bind({}, { key: ws, lane: 'nope', scope: 'workspace' })).toMatchObject({ ok: false })
+    // ONE CHART NEVER HAS TWO DRIVERS: a lane a Claude window holds is refused, with the holder named
+    const refused = (await bind({}, { key: ws, lane: 'atlas', scope: 'workspace' })) as { error: string; ok: boolean }
+    expect(refused.ok).toBe(false)
+    expect(refused.error).toContain('Claude window')
+    expect(refused.error).toContain('11658')
     expect(await bind({}, { key: 'x', lane: 'atlas', scope: 'workspace' })).toMatchObject({ ok: false })
     expect(await bind({}, { key: ws, lane: 'hermes-atlas', scope: 'workspace' })).toEqual({ error: null, ok: true })
     const written = JSON.parse(fs.readFileSync(path.join(dir, 'hermes_bindings.json'), 'utf8'))

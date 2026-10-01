@@ -298,7 +298,7 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
     }
   }
 
-  const bind = (request: unknown): TvLaneBindResult => {
+  const bind = async (request: unknown): Promise<TvLaneBindResult> => {
     if (!isRecord(request)) {
       return { error: 'bad request', ok: false }
     }
@@ -319,9 +319,25 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
 
     if (lane !== null) {
       const registry = readJson(path.join(dir, 'channels.json'))
+      const lanes = lanesFromRegistry(registry)
 
-      if (!lanesFromRegistry(registry)[lane]) {
+      if (!lanes[lane]) {
         return { error: `lane ${lane} is not in the registry`, ok: false }
+      }
+
+      // ONE CHART NEVER HAS TWO DRIVERS (owner, 2026-10-01): a lane another driver holds is refused here, not merely
+      // greyed in the picker, so no path can bind it. Free lanes and lanes this app holds are the only ones taken.
+      applyStatus(lanes, readJson(path.join(dir, 'channel_status.json')))
+      const target = lanes[lane]
+
+      if (target.claimState === 'held') {
+        const app = target.holderPid === null ? null : await holderAppOf(target.holderPid, readProcess)
+
+        if (app !== 'hermes') {
+          const who = app === 'claude' ? 'a Claude window' : app === 'hermes-gateway' ? 'the background Hermes gateway' : 'another process'
+
+          return { error: `lane ${lane} is held by ${who} (pid ${target.holderPid ?? '?'}); release it there first — one chart never has two drivers`, ok: false }
+        }
       }
     }
 

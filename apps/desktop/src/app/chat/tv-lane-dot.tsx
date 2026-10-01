@@ -20,6 +20,8 @@ import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
 import { $tvLanes, bindTvLane, createTvLane, resolveTvLane, type TvLaneDotState } from '@/store/tv-lanes'
 
+// Same size as the chat-activity dot; the faint grey hollow for "no lane" is wanted (owner, 2026-10-01: "grey is very
+// faint - good"), so a tree without a lane stays quiet and a bound one stands out.
 const DOT_BASE = 'inline-block size-1.5 shrink-0 rounded-full'
 
 const DOT_CLASS: Record<TvLaneDotState, string> = {
@@ -33,13 +35,13 @@ const DOT_CLASS: Record<TvLaneDotState, string> = {
 }
 
 const STATE_WORD: Record<TvLaneDotState, string> = {
-  conflict: 'CONFLICT',
+  conflict: 'FAULT',
   declared: 'declared by the CLI',
   degraded: 'degraded',
   linked: 'registered',
   live: 'LIVE',
-  stale: 'stale',
-  unlinked: 'no lane'
+  stale: 'stale snapshot',
+  unlinked: 'no lane (click to link)'
 }
 
 export interface TvLaneDotProps {
@@ -86,17 +88,34 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
     }
   }
 
+  // ONE CHART NEVER HAS TWO DRIVERS (owner, 2026-10-01): a lane whose claim another driver holds cannot be taken
+  // from here — it is shown, greyed, with its holder named, and the IPC refuses it as well. Free lanes and lanes this
+  // app already holds are the only choices.
+  const heldElsewhere = (l: (typeof hermesLanes)[number]): null | string =>
+    l.claimState !== 'held' || l.holderApp === 'hermes'
+      ? null
+      : l.holderApp === 'claude'
+        ? `held by a Claude window (pid ${l.holderPid}): release it there first`
+        : l.holderApp === 'hermes-gateway'
+          ? `held by the background Hermes gateway (pid ${l.holderPid})`
+          : `held by another process (pid ${l.holderPid ?? '?'})`
+
   const laneItems = (scope: 'session' | 'workspace', key: null | string) =>
-    hermesLanes.map(l => (
-      <DropdownMenuItem key={`${scope}:${l.id}`} onSelect={() => void apply(scope, key, l.id)}>
-        <span aria-hidden className={cn(DOT_BASE, 'mr-1.5')} style={{ backgroundColor: l.color ?? undefined }} />
-        <span className="font-mono text-xs">{l.id}</span>
-        <span className="ml-1 truncate text-(--ui-text-tertiary)">
-          {l.label} · {l.layouts.join(', ') || 'no layout'}
-          {r.laneId === l.id && r.source === scope ? ' · current' : ''}
-        </span>
-      </DropdownMenuItem>
-    ))
+    hermesLanes.map(l => {
+      const blocked = heldElsewhere(l)
+
+      return (
+        <DropdownMenuItem disabled={blocked !== null} key={`${scope}:${l.id}`} onSelect={() => void apply(scope, key, l.id)}>
+          <span aria-hidden className={cn(DOT_BASE, 'mr-1.5')} style={{ backgroundColor: l.color ?? undefined }} />
+          <span className="font-mono text-xs">{l.id}</span>
+          <span className="ml-1 truncate text-(--ui-text-tertiary)">
+            {l.label} · {l.layouts.join(', ') || 'no layout'}
+            {r.laneId === l.id && r.source === scope ? ' · current' : ''}
+            {blocked ? ` · ${blocked}` : ''}
+          </span>
+        </DropdownMenuItem>
+      )
+    })
 
   return (
     <DropdownMenu onOpenChange={setOpen} open={open}>
