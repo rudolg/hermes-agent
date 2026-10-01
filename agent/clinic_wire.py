@@ -92,17 +92,20 @@ def _has_phrase(folded: str, phrase: str) -> bool:
     for match in re.finditer(pattern, folded):
         before = folded[match.start() - 1] if match.start() else ""
         after = folded[match.end()] if match.end() < len(folded) else ""
-        span = _quote_span(folded, match.start(), match.end())
         if before in {"'", '"', "`"} and after in {"'", '"', "`"}:
             rest = folded[match.end() + 1 :].lstrip()
             if not rest.startswith(":"):
                 continue
-        elif span is not None:
-            open_at, close_at = span
-            inside = close_at - open_at - 1
-            rest = folded[close_at + 1 :].lstrip()
-            outside = len(folded) - inside
-            if not rest.startswith(":") and inside <= 160 and outside > inside:
+        else:
+            span = _quote_span(folded, match.start(), match.end())
+            if span is not None:
+                open_at, close_at = span
+                inside = close_at - open_at - 1
+                rest = folded[close_at + 1 :].lstrip()
+                outside = len(folded) - inside
+                if not rest.startswith(":") and inside <= 160 and outside > inside:
+                    continue
+            if _escaped_quote_mention(folded, match.start(), match.end()):
                 continue
         return True
     return False
@@ -120,15 +123,92 @@ def _is_clinic(folded: str) -> bool:
     return False
 
 
+_PATH_END = set("/ \t\r\n\"'`.,;:)]?!}")
+
+
+def _escaped_quote_mention(folded: str, start: int, end: int) -> bool:
+    # Return true when a short \"...\" span in a longer JSON text only names the folder.
+    opener = folded.rfind('\\"', 0, start)
+    if opener < 0 or start - (opener + 2) > 160:
+        return False
+    closer = folded.find('\\"', end)
+    if closer < 0:
+        return False
+    inside = closer - (opener + 2)
+    if inside <= 0 or inside > 160 or len(folded) - inside <= inside:
+        return False
+    if any(ch in folded[opener + 2 : start] for ch in ",{}[]:"):
+        return False
+    nxt = folded[closer + 2] if closer + 2 < len(folded) else ""
+    if nxt not in {",", "}", "]", ":", "", " ", "\n", "\t", ")", "\\", '"', "'", "`"}:
+        return False
+    return folded[closer + 2 :].lstrip().startswith(":") is False
+
+
+def _comment_mention(folded: str, start: int, end: int, after: str) -> bool:
+    # Return true when a hash comment in a long text names the folder.
+    if after == "/":
+        return False
+    window_at = max(0, start - 12)
+    window = folded[window_at:start]
+    hash_at = window.rfind("#")
+    if hash_at < 0 or window[hash_at + 1 :].strip() != "":
+        return False
+    prev = folded[window_at + hash_at - 1] if window_at + hash_at else ""
+    if prev not in {"", " ", "\t", "\n", "|"}:
+        return False
+    return len(folded) > 400
+
+
+def _path_is_only_named(folded: str, start: int, end: int) -> bool:
+    # Return true when the folder is named in a quote or a comment, not opened.
+    before = folded[start - 1] if start else ""
+    after = folded[end] if end < len(folded) else ""
+    if before in {"'", '"', "`"} and after in {"'", '"', "`"}:
+        rest = folded[end + 1 :].lstrip()
+        inside = end - start
+        if not rest.startswith(":") and len(folded) - inside > inside:
+            return True
+    span = _quote_span(folded, start, end)
+    if span is not None:
+        open_at, close_at = span
+        inside = close_at - open_at - 1
+        rest = folded[close_at + 1 :].lstrip()
+        if not rest.startswith(":") and inside <= 160 and len(folded) - inside > inside:
+            return True
+    if _escaped_quote_mention(folded, start, end):
+        return True
+    if after == "/":
+        return False
+    return _comment_mention(folded, start, end, after)
+
+
+def _has_denied_path(folded: str) -> bool:
+    # Return true when the text opens a denied folder.
+    for root in DENIED:
+        needle = root.casefold()
+        begin = 0
+        while True:
+            at = folded.find(needle, begin)
+            if at < 0:
+                break
+            stop = at + len(needle)
+            nxt = folded[stop] if stop < len(folded) else ""
+            if nxt == "" or nxt in _PATH_END:
+                if not _path_is_only_named(folded, at, stop):
+                    return True
+            begin = at + 1
+    return False
+
+
 def refusal_for(text: str, *, vendor: str) -> str:
     if not text:
         return ""
     folded = text.casefold()
     if _is_clinic(folded):
         return CODEX_REFUSAL if vendor == "codex" else CLAUDE_REFUSAL
-    for root in DENIED:
-        if root.casefold() in folded:
-            return CODEX_REFUSAL if vendor == "codex" else CLAUDE_REFUSAL
+    if _has_denied_path(folded):
+        return CODEX_REFUSAL if vendor == "codex" else CLAUDE_REFUSAL
     return ""
 
 

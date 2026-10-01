@@ -59,6 +59,56 @@ def test_two_letter_cues_still_stop():
 
 def test_denied_path_still_stops():
     assert refusal_for("read /Users/spinec/MDT/note.txt", vendor="claude") == CLAUDE_REFUSAL
+    assert refusal_for("open ~/Documents/Heidi/x", vendor="claude") == CLAUDE_REFUSAL
+    assert refusal_for("read /Users/spinec/MDT now", vendor="claude") == CLAUDE_REFUSAL
+    assert refusal_for('"read /Users/spinec/MDT/note.txt"', vendor="claude") == CLAUDE_REFUSAL
+    assert refusal_for("open ~/MDT-today", vendor="claude") == CLAUDE_REFUSAL
+
+
+def test_a_named_folder_in_source_is_not_an_open():
+    catalogue = ", ".join('"%s"' % root for root in (
+        "/Users/spinec/MDT",
+        "~/MDT",
+        "~/MDT-today",
+        "~/Documents/Heidi",
+    ))
+    pad = "note " * 40
+    quoted = pad + '"read /Users/spinec/MDT/note.txt" ' + pad + '"open ~/Documents/Heidi/x"'
+    comment = pad + "\n# ~/MDT-today is a name in source\n" + pad
+    assert refusal_for(catalogue, vendor="claude") == ""
+    assert refusal_for(quoted, vendor="claude") == ""
+    assert refusal_for(comment, vendor="claude") == ""
+    assert refusal_for(pad + "\nread /Users/spinec/MDT/note.txt\n" + pad, vendor="claude") == CLAUDE_REFUSAL
+
+
+def test_a_json_tool_line_that_names_a_folder_is_not_an_open():
+    pad = " note" * 80
+    quoted = '{"content": "prefix \\"read /Users/spinec/MDT/note.txt\\"}' + pad
+    comment = '{"content": "10|# ~/MDT-today is a name in source"}' + pad
+    assert refusal_for(quoted, vendor="claude") == ""
+    assert refusal_for(comment, vendor="claude") == ""
+    assert refusal_for("# ~/MDT-today", vendor="claude") == CLAUDE_REFUSAL
+    assert refusal_for(pad + " read /Users/spinec/MDT/note.txt", vendor="claude") == CLAUDE_REFUSAL
+
+
+def test_a_json_quoted_marker_list_is_a_mention():
+    text = (
+        '{"content": "\\"hospital number\\", \\"nhs number\\", \\"date of birth\\", '
+        '\\"clinic letter\\", \\"this is an appraisal\\"}'
+        + (" note" * 40)
+    )
+    assert refusal_for(text, vendor="claude") == ""
+    assert refusal_for('{"content": "the hospital number is 12"}', vendor="claude") == CLAUDE_REFUSAL
+    assert refusal_for(
+        '{"content": "\\"hospital number\\": \\"0000000\\"}' + (" note" * 40),
+        vendor="claude",
+    ) == CLAUDE_REFUSAL
+
+
+def test_these_turns_are_not_clinic():
+    assert refusal_for("in fact running on opus", vendor="claude") == ""
+    assert refusal_for("continue it is not clinical", vendor="claude") == ""
+    assert refusal_for("and", vendor="claude") == ""
 
 
 def test_backtick_token_is_a_mention():
