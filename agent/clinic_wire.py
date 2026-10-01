@@ -55,9 +55,57 @@ CODEX_REFUSAL = (
 )
 
 
+def _quote_span(folded: str, start: int, end: int) -> tuple[int, int] | None:
+    # Return the single-line double-quoted or backticked span that contains the match.
+    line_start = folded.rfind("\n", 0, start) + 1
+    line_end = folded.find("\n", end)
+    if line_end < 0:
+        line_end = len(folded)
+    line = folded[line_start:line_end]
+    rel_start = start - line_start
+    rel_end = end - line_start
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if ch not in {'"', "`"}:
+            i += 1
+            continue
+        j = i + 1
+        while j < len(line):
+            if ch != "`" and line[j] == "\\":
+                j += 2
+                continue
+            if line[j] == ch:
+                if i < rel_start and rel_end <= j:
+                    return line_start + i, line_start + j
+                i = j + 1
+                break
+            j += 1
+        else:
+            return None
+    return None
+
+
 def _has_phrase(folded: str, phrase: str) -> bool:
-    # "hospital numbers" and "clinic letters" are instructions, not a letter.
-    return re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", folded) is not None
+    # Match the phrase as its own words, skipping a quoted mention in a longer text.
+    pattern = r"(?<!\w)" + re.escape(phrase) + r"(?!\w)"
+    for match in re.finditer(pattern, folded):
+        before = folded[match.start() - 1] if match.start() else ""
+        after = folded[match.end()] if match.end() < len(folded) else ""
+        span = _quote_span(folded, match.start(), match.end())
+        if before in {"'", '"', "`"} and after in {"'", '"', "`"}:
+            rest = folded[match.end() + 1 :].lstrip()
+            if not rest.startswith(":"):
+                continue
+        elif span is not None:
+            open_at, close_at = span
+            inside = close_at - open_at - 1
+            rest = folded[close_at + 1 :].lstrip()
+            outside = len(folded) - inside
+            if not rest.startswith(":") and inside <= 160 and outside > inside:
+                continue
+        return True
+    return False
 
 
 def _is_clinic(folded: str) -> bool:
