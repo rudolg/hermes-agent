@@ -245,6 +245,7 @@ export function WorkspaceHeader({
   onToggle,
   open,
   title,
+  lane,
   ref,
   ...rest
 }: {
@@ -256,6 +257,8 @@ export function WorkspaceHeader({
   open: boolean
   /** Hover tooltip — the lane's full on-disk path (worktree / repo root). */
   title?: string
+  /** The TradingView lane dot for this tree (its own click target, outside the toggle). */
+  lane?: React.ReactNode
 } & React.ComponentProps<'div'>) {
   return (
     <div
@@ -281,6 +284,7 @@ export function WorkspaceHeader({
           open={open}
         />
       </button>
+      {lane}
       {action}
     </div>
   )

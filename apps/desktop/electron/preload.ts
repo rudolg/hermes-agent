@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 
 import type { DesktopProfileRoute } from './desktop-profile'
 import type { HudModifierApi, HudModifierStatus } from './hud-modifier-types'
+import type { TvLaneBindRequest, TvLanesApi } from './tv-lanes-types'
 import { customWindowControlsEnabled } from './window-controls'
 
 // Which translucency the OS can back. Asked synchronously because the renderer
@@ -422,6 +423,12 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   reportRendererError: report => ipcRenderer.send('hermes:logs:renderer-error', report),
   logLine: (line: string): void => ipcRenderer.send('hermes:logs:renderer-line', line),
   readDir: dirPath => ipcRenderer.invoke('hermes:fs:readDir', dirPath),
+  // TradingView CDP lanes for the sidebar's lane dot — see tv-lanes-ipc.ts.
+  tvLanes: {
+    bind: (request: TvLaneBindRequest) => ipcRenderer.invoke('hermes:tv-lanes:bind', request),
+    create: () => ipcRenderer.invoke('hermes:tv-lanes:create'),
+    get: (workspacePaths: string[]) => ipcRenderer.invoke('hermes:tv-lanes:get', workspacePaths)
+  } satisfies TvLanesApi,
   gitRoot: startPath => ipcRenderer.invoke('hermes:fs:gitRoot', startPath),
   revealPath: targetPath => ipcRenderer.invoke('hermes:fs:reveal', targetPath),
   openDir: dirPath => ipcRenderer.invoke('hermes:fs:openDir', dirPath),

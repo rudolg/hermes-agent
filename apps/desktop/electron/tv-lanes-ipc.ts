@@ -1,0 +1,365 @@
+/**
+ * `hermes:tv-lanes:*` — TradingView CDP lane state for the sidebar's lane dot (owner ask, 2026-10-01). Main reads the
+ * three local files the menu-bar lamp already trusts and answers one IPC; it never drives the browser:
+ *   <home>/.tradingview-mcp/channels.json         the lane registry (label, color, layouts)
+ *   <home>/.tradingview-mcp/channel_status.json   the ~60 s publisher snapshot (claim, health, charts)
+ *   <home>/.tradingview-mcp/hermes_bindings.json  THIS app's declarations: workspace path -> lane, session id -> lane
+ * plus, per workspace the renderer names, the CLI's own declaration `<workspace>/.mcp.json` env TV_CDP_CHANNEL —
+ * returned as a DECLARATION only, because Hermes does not run that tree's server (the arms' ruling, 2026-10-01: never
+ * present a declared lane as an operational binding).
+ *
+ * A bind writes the bindings file atomically (temp + rename) and refuses a lane the registry does not know; `create`
+ * hands off to the lamp's own one-click "new Hermes lane" script, which asks for the project / name in its dialogs.
+ */
+import { execFile, spawn } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
+
+import { ipcMain } from 'electron'
+
+import type { TvLaneBindRequest, TvLaneBindResult, TvLanesSnapshot, TvLaneView } from './tv-lanes-types'
+
+const LANE_ID_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{6,64}$/
+const SNAPSHOT_MAX_PATHS = 64
+const ANCESTRY_HOPS = 8
+const HOLDER_CACHE_MS = 60_000
+/** The lamp's provisioner (menubar-plugins); overridable for a machine where it lives elsewhere. */
+const NEW_LANE_SCRIPT = process.env.HERMES_TV_LANE_NEW_SCRIPT || '/Users/spinec/src/menubar-plugins/tv-lane-new-hermes.py'
+
+export interface TvLanesIpcDeps {
+  homeDir: string
+  /** Test seam: ps ancestry lookup; defaults to /bin/ps. */
+  readProcess?: (pid: number) => Promise<null | { command: string; ppid: number }>
+  now?: () => number
+}
+
+export const stateDir = (homeDir: string): string => path.join(homeDir, '.tradingview-mcp')
+export const bindingsPathFor = (homeDir: string): string => path.join(stateDir(homeDir), 'hermes_bindings.json')
+
+const normalizePath = (p: string): string => p.replace(/[/\\]+$/, '')
+
+function readJson(file: string): unknown {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8')) as unknown
+  } catch {
+    return null
+  }
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+const str = (v: unknown): null | string => (typeof v === 'string' && v.length > 0 ? v : null)
+const strList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+
+/** Registry rows -> lane views with no snapshot data yet. */
+export function lanesFromRegistry(registry: unknown): Record<string, TvLaneView> {
+  const out: Record<string, TvLaneView> = {}
+  const channels = isRecord(registry) && isRecord(registry.channels) ? registry.channels : {}
+
+  for (const [id, row] of Object.entries(channels)) {
+    if (!LANE_ID_RE.test(id) || !isRecord(row)) {
+      continue
+    }
+
+    out[id] = {
+      active: false,
+      claimState: 'unknown',
+      color: str(row.color),
+      healthFresh: false,
+      healthVerdict: null,
+      holderApp: null,
+      holderPid: null,
+      id,
+      intended: null,
+      label: str(row.label) ?? id.toUpperCase(),
+      layouts: strList(row.layouts),
+      policy: str(row.policy),
+      reasons: [],
+      slugs: [],
+      tabPresent: false,
+      up: false
+    }
+  }
+
+  return out
+}
+
+/** Overlay the publisher's snapshot onto the registry views; returns the snapshot's generated_at. */
+export function applyStatus(lanes: Record<string, TvLaneView>, status: unknown): null | string {
+  if (!isRecord(status) || !Array.isArray(status.channels)) {
+    return null
+  }
+
+  for (const entry of status.channels) {
+    if (!isRecord(entry)) {
+      continue
+    }
+
+    const id = str(entry.channel_id)
+    const lane = id ? lanes[id] : undefined
+
+    if (!lane) {
+      continue
+    }
+
+    const claim = isRecord(entry.claim) ? entry.claim : {}
+    const holder = isRecord(claim.holder) ? claim.holder : {}
+    const health = isRecord(entry.health) ? entry.health : {}
+    const charts = isRecord(entry.charts) ? entry.charts : {}
+    const claimState = str(claim.state)
+    lane.up = entry.up === true
+    lane.active = entry.active === true
+    lane.claimState =
+      claimState === 'held' || claimState === 'free' || claimState === 'stale' ? claimState : 'unknown'
+    lane.holderPid = typeof holder.pid === 'number' && Number.isInteger(holder.pid) && holder.pid > 1 ? holder.pid : null
+    lane.healthVerdict = str(health.verdict)
+    lane.healthFresh = health.fresh === true
+    lane.intended = str(charts.intended)
+    lane.slugs = strList(charts.slugs)
+    lane.tabPresent = charts.tab_present === true
+    lane.reasons = strList(entry.reasons)
+  }
+
+  return str(status.generated_at)
+}
+
+/** The CLI's declaration for one workspace: `<workspace>/.mcp.json` -> mcpServers.tradingview.env.TV_CDP_CHANNEL. */
+export function declaredLane(workspacePath: string): null | string {
+  const doc = readJson(path.join(workspacePath, '.mcp.json'))
+
+  if (!isRecord(doc) || !isRecord(doc.mcpServers)) {
+    return null
+  }
+
+  const tv = doc.mcpServers.tradingview
+  const env = isRecord(tv) && isRecord(tv.env) ? tv.env : null
+  const lane = env ? str(env.TV_CDP_CHANNEL) : null
+
+  return lane && LANE_ID_RE.test(lane) ? lane : null
+}
+
+export function readBindings(file: string): TvLanesSnapshot['bindings'] {
+  const doc = readJson(file)
+  const out: TvLanesSnapshot['bindings'] = { sessions: {}, workspaces: {} }
+
+  if (!isRecord(doc)) {
+    return out
+  }
+
+  for (const scope of ['sessions', 'workspaces'] as const) {
+    const table = isRecord(doc[scope]) ? doc[scope] : {}
+
+    for (const [key, row] of Object.entries(table)) {
+      const lane = isRecord(row) ? str(row.lane) : null
+
+      if (lane && LANE_ID_RE.test(lane)) {
+        out[scope][scope === 'workspaces' ? normalizePath(key) : key] = { lane, since: (isRecord(row) && str(row.since)) || '' }
+      }
+    }
+  }
+
+  return out
+}
+
+function writeBindings(file: string, bindings: TvLanesSnapshot['bindings']): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const tmp = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(tmp, `${JSON.stringify({ bindings_schema: 'tv.hermes_bindings/v1', ...bindings }, null, 2)}\n`, { mode: 0o600 })
+  fs.renameSync(tmp, file)
+}
+
+const defaultReadProcess = (pid: number): Promise<null | { command: string; ppid: number }> =>
+  new Promise(resolve => {
+    execFile('/bin/ps', ['-o', 'ppid=,command=', '-p', String(pid)], { timeout: 3000 }, (error, stdout) => {
+      if (error) {
+        resolve(null)
+
+        return
+      }
+
+      const line = String(stdout).trim()
+      const m = /^(\d+)\s+(.*)$/.exec(line)
+      resolve(m ? { command: m[2], ppid: Number(m[1]) } : null)
+    })
+  })
+
+/** Which app a process descends from: the WHOLE ancestry is read first (bounded), then judged, so a Hermes backend
+ *  whose own command names the hermes-agent checkout cannot be mistaken for the gateway before the desktop app above
+ *  it is seen. Measured 2026-10-01: desktop = node -> python backend -> Hermes.app/Contents/MacOS/Hermes; gateway =
+ *  node -> python -> python -> osascript wrapper exec'ing `.../hermes-agent/.hermes/bin/hermes --run-module ...`. */
+export async function holderAppOf(
+  pid: number,
+  readProcess: NonNullable<TvLanesIpcDeps['readProcess']>
+): Promise<TvLaneView['holderApp']> {
+  const chain: string[] = []
+  let cur = pid
+
+  for (let hop = 0; hop < ANCESTRY_HOPS; hop += 1) {
+    const info = await readProcess(cur)
+
+    if (!info) {
+      if (hop === 0) {
+        return null
+      }
+
+      break
+    }
+
+    chain.push(info.command)
+
+    if (!Number.isInteger(info.ppid) || info.ppid <= 1) {
+      break
+    }
+
+    cur = info.ppid
+  }
+
+  if (chain.some(c => c.includes('Hermes.app/Contents/MacOS/Hermes'))) {
+    return 'hermes'
+  }
+
+  if (chain.some(c => /\bhermes\b.*--run-module|\bhermes (gateway|serve)\b|\/hermes-agent\/.*\/bin\/hermes\b/.test(c))) {
+    return 'hermes-gateway'
+  }
+
+  if (chain.some(c => /\bclaude\b/.test(c))) {
+    return 'claude'
+  }
+
+  return 'other'
+}
+
+export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, now = Date.now }: TvLanesIpcDeps): void {
+  const dir = stateDir(homeDir)
+  const bindingsFile = bindingsPathFor(homeDir)
+  const holderCache = new Map<number, { at: number; app: TvLaneView['holderApp'] }>()
+
+  const snapshot = async (workspacePaths: unknown): Promise<TvLanesSnapshot> => {
+    const base: TvLanesSnapshot = {
+      bindings: { sessions: {}, workspaces: {} },
+      bindingsPath: bindingsFile,
+      declared: {},
+      error: null,
+      generatedAt: null,
+      lanes: {},
+      ok: true,
+      snapshotAgeS: null
+    }
+
+    const registry = readJson(path.join(dir, 'channels.json'))
+
+    if (!registry) {
+      return { ...base, error: `registry unreadable: ${path.join(dir, 'channels.json')}`, ok: false }
+    }
+
+    const lanes = lanesFromRegistry(registry)
+    const generatedAt = applyStatus(lanes, readJson(path.join(dir, 'channel_status.json')))
+    const ageS = generatedAt ? Math.max(0, Math.round((now() - Date.parse(generatedAt)) / 1000)) : null
+
+    for (const lane of Object.values(lanes)) {
+      if (lane.holderPid === null) {
+        continue
+      }
+
+      const cached = holderCache.get(lane.holderPid)
+
+      if (cached && now() - cached.at < HOLDER_CACHE_MS) {
+        lane.holderApp = cached.app
+
+        continue
+      }
+
+      lane.holderApp = await holderAppOf(lane.holderPid, readProcess)
+      holderCache.set(lane.holderPid, { app: lane.holderApp, at: now() })
+    }
+
+    const declared: Record<string, string> = {}
+    const asked = Array.isArray(workspacePaths) ? workspacePaths.filter((p): p is string => typeof p === 'string') : []
+
+    for (const p of asked.slice(0, SNAPSHOT_MAX_PATHS)) {
+      if (!path.isAbsolute(p) || !p.startsWith(homeDir)) {
+        continue
+      }
+
+      const lane = declaredLane(p)
+
+      if (lane) {
+        declared[normalizePath(p)] = lane
+      }
+    }
+
+    return {
+      ...base,
+      bindings: readBindings(bindingsFile),
+      declared,
+      generatedAt,
+      lanes,
+      snapshotAgeS: Number.isFinite(ageS) ? ageS : null
+    }
+  }
+
+  const bind = (request: unknown): TvLaneBindResult => {
+    if (!isRecord(request)) {
+      return { error: 'bad request', ok: false }
+    }
+
+    const { key, lane, scope } = request as Partial<TvLaneBindRequest>
+
+    if (scope !== 'session' && scope !== 'workspace') {
+      return { error: 'scope must be session or workspace', ok: false }
+    }
+
+    if (typeof key !== 'string' || (scope === 'workspace' ? !path.isAbsolute(key) : !SESSION_ID_RE.test(key))) {
+      return { error: 'bad key', ok: false }
+    }
+
+    if (lane !== null && (typeof lane !== 'string' || !LANE_ID_RE.test(lane))) {
+      return { error: 'bad lane id', ok: false }
+    }
+
+    if (lane !== null) {
+      const registry = readJson(path.join(dir, 'channels.json'))
+
+      if (!lanesFromRegistry(registry)[lane]) {
+        return { error: `lane ${lane} is not in the registry`, ok: false }
+      }
+    }
+
+    const bindings = readBindings(bindingsFile)
+    const table = scope === 'workspace' ? bindings.workspaces : bindings.sessions
+    const k = scope === 'workspace' ? normalizePath(key) : key
+
+    if (lane === null) {
+      delete table[k]
+    } else {
+      table[k] = { lane, since: new Date(now()).toISOString() }
+    }
+
+    try {
+      writeBindings(bindingsFile, bindings)
+    } catch (error) {
+      return { error: `bindings not written: ${error instanceof Error ? error.message : String(error)}`, ok: false }
+    }
+
+    return { error: null, ok: true }
+  }
+
+  const create = (): TvLaneBindResult => {
+    if (!fs.existsSync(NEW_LANE_SCRIPT)) {
+      return { error: `provisioner missing: ${NEW_LANE_SCRIPT}`, ok: false }
+    }
+
+    try {
+      const child = spawn('/usr/bin/python3', [NEW_LANE_SCRIPT], { detached: true, stdio: 'ignore' })
+      child.unref()
+    } catch (error) {
+      return { error: `provisioner not started: ${error instanceof Error ? error.message : String(error)}`, ok: false }
+    }
+
+    return { error: null, ok: true }
+  }
+
+  ipcMain.handle('hermes:tv-lanes:get', async (_event, workspacePaths) => snapshot(workspacePaths))
+  ipcMain.handle('hermes:tv-lanes:bind', async (_event, request) => bind(request))
+  ipcMain.handle('hermes:tv-lanes:create', async () => create())
+}

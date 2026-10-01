@@ -15,6 +15,7 @@ import { switchBranchInRepo } from '@/store/projects'
 import { $sessionProfilesUsage } from '@/store/session'
 import { $sidebarSessionRankIds } from '@/store/sidebar-sort'
 
+import { TvLaneDot } from '../../tv-lane-dot'
 import { SidebarGroupRow, SidebarRowLead, SidebarRowLink, SidebarRowStack } from '../chrome'
 import { rankSessions } from '../order'
 
@@ -221,6 +222,7 @@ export function SidebarWorkspaceGroup({
             }
             icon={leadingIcon}
             label={group.label}
+            lane={group.path ? <TvLaneDot workspacePath={group.path} /> : undefined}
             onToggle={toggleOpen}
             open={open}
             title={group.path ? displayPath(group.path) : undefined}

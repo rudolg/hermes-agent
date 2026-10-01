@@ -37,6 +37,7 @@ import { sessionCostUsd } from '@/store/sidebar-archive'
 import { $todoProgressBySession } from '@/store/todos'
 
 import { SessionStatusDot } from '../session-status-dot'
+import { TvLaneDot } from '../tv-lane-dot'
 
 import {
   SIDEBAR_ROW_CARD_MIN_H,
@@ -545,7 +546,10 @@ function SidebarSessionRowImpl({
                         onPointerEnter={armMarquee}
                         onPointerLeave={disarmMarquee}
                       >
-                        <span className="hover-marquee-inner">{title}</span>
+                        <span className="hover-marquee-inner">
+                          <TvLaneDot className="mr-0.5 inline-flex align-middle" cwd={session.cwd} hideUnlinked sessionId={session.id} />
+                          {title}
+                        </span>
                       </SidebarRowLabel>
                     </OverflowTip>
                     {/* Session-list density (#68119): comfortable adds one
@@ -612,7 +616,10 @@ function SidebarSessionRowImpl({
                       onPointerEnter={armMarquee}
                       onPointerLeave={disarmMarquee}
                     >
-                      <span className="hover-marquee-inner">{title}</span>
+                      <span className="hover-marquee-inner">
+                        <TvLaneDot className="mr-0.5 inline-flex align-middle" cwd={session.cwd} hideUnlinked sessionId={session.id} />
+                        {title}
+                      </span>
                     </SidebarRowLabel>
                   </OverflowTip>
                   {session.preview && rowMeta.includes('preview') ? (

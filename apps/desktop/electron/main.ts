@@ -531,6 +531,7 @@ import {
   windowOpacityFor,
   windowOpacityOptions
 } from './translucency'
+import { registerTvLanesIpc } from './tv-lanes-ipc'
 import { updateGateReason, waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, updateHandoffConflict, writeUpdateMarker } from './update-marker'
 import {
@@ -18154,6 +18155,9 @@ registerFsIpc({
 
 // Git-driven features (worktrees, review pane, repo scan) — see git-ipc.ts.
 registerGitIpc({ resolveGitBinary, resolveGhBinary })
+
+// TradingView CDP lanes for the sidebar's lane dot (reads ~/.tradingview-mcp) — see tv-lanes-ipc.ts.
+registerTvLanesIpc({ homeDir: app.getPath('home') })
 
 // Client-side loopback callback for MCP OAuth against remote backends — see
 // mcp-oauth-callback-ipc.ts.

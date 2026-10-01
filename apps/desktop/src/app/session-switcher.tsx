@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { $switcherIndex, $switcherOpen, $switcherSessions, closeSwitcher } from '@/store/session-switcher'
 
 import { SessionStatusDot } from './chat/session-status-dot'
+import { TvLaneDot } from './chat/tv-lane-dot'
 import { HUD_ITEM, HUD_POSITION, HUD_SURFACE, HUD_TEXT } from './floating-hud'
 import { openSession } from './open-session'
 
@@ -70,6 +71,7 @@ export function SessionSwitcher() {
               ref={selected ? activeRef : undefined}
             >
               <SessionStatusDot className="shrink-0" session={session} storedSessionId={session.id} />
+              <TvLaneDot className="shrink-0" cwd={session.cwd} hideUnlinked sessionId={session.id} />
               <span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span>
               {i < 9 && (
                 <span

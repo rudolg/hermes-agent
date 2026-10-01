@@ -1,0 +1,184 @@
+/**
+ * `hermes:tv-lanes:*` reads the lamp's files and answers honestly: a lane the registry does not know is refused, a
+ * missing snapshot leaves every lane unknown, the CLI's `.mcp.json` is a declaration only, a bind lands atomically.
+ * Fixtures are the publisher's real shapes of 2026-10-01 (channel_status.json, channels.json).
+ */
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+const electron = vi.hoisted(() => ({
+  handlers: new Map<string, (...args: unknown[]) => unknown>()
+}))
+
+vi.mock('electron', () => ({
+  ipcMain: {
+    handle: (channel: string, fn: (...args: unknown[]) => unknown) => {
+      electron.handlers.set(channel, fn)
+    }
+  }
+}))
+
+import { applyStatus, declaredLane, holderAppOf, lanesFromRegistry, readBindings, registerTvLanesIpc } from './tv-lanes-ipc'
+
+const registry = {
+  browser: { port: 9223 },
+  channels: {
+    atlas: { color: '#8a5cf6', label: 'ATLAS', layouts: ['LCEdRvf8'], policy: 'battlefield' },
+    'hermes-atlas': { color: '#e07b39', label: 'HERMES_ATLAS', layouts: ['N06Rmf2K'], policy: 'battlefield' },
+    'Bad Id!': { label: 'X' }
+  }
+}
+
+const status = {
+  channels: [
+    {
+      active: false,
+      channel_id: 'hermes-atlas',
+      charts: { intended: null, slugs: [], tab_present: false },
+      claim: { holder: { pid: 92998 }, state: 'held' },
+      health: { fresh: false, verdict: 'BINDING_TAB_CLOSED' },
+      reasons: ['binding_tab_closed'],
+      up: false
+    },
+    {
+      active: true,
+      channel_id: 'atlas',
+      charts: { intended: 'LCEdRvf8', slugs: ['LCEdRvf8'], tab_present: true },
+      claim: { holder: { pid: 11658 }, state: 'held' },
+      health: { fresh: true, verdict: 'TAB_OK' },
+      reasons: [],
+      up: true
+    },
+    { channel_id: 'ghost', up: true }
+  ],
+  generated_at: '2026-10-01T09:53:09.732Z',
+  schema: 'tv.channel_status/v1'
+}
+
+const tmpDirs: string[] = []
+
+const makeHome = (): string => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-lanes-'))
+  tmpDirs.push(home)
+  fs.mkdirSync(path.join(home, '.tradingview-mcp'))
+
+  return home
+}
+
+afterEach(() => {
+  for (const d of tmpDirs.splice(0)) {
+    fs.rmSync(d, { force: true, recursive: true })
+  }
+
+  electron.handlers.clear()
+})
+
+describe('lanesFromRegistry + applyStatus', () => {
+  it('keeps only well-formed lane ids and overlays the snapshot by channel_id', () => {
+    const lanes = lanesFromRegistry(registry)
+    expect(Object.keys(lanes).sort()).toEqual(['atlas', 'hermes-atlas'])
+    expect(lanes.atlas.policy).toBe('battlefield')
+    expect(applyStatus(lanes, status)).toBe('2026-10-01T09:53:09.732Z')
+    expect(lanes['hermes-atlas']).toMatchObject({ claimState: 'held', healthVerdict: 'BINDING_TAB_CLOSED', holderPid: 92998, intended: null, up: false })
+    expect(lanes.atlas).toMatchObject({ claimState: 'held', healthVerdict: 'TAB_OK', intended: 'LCEdRvf8', slugs: ['LCEdRvf8'], up: true })
+  })
+
+  it('negative control: no snapshot leaves every lane unknown, never up', () => {
+    const lanes = lanesFromRegistry(registry)
+    expect(applyStatus(lanes, null)).toBeNull()
+    expect(lanes.atlas).toMatchObject({ claimState: 'unknown', holderPid: null, up: false })
+  })
+})
+
+describe('holderAppOf', () => {
+  it('names the app at the top of the ancestry and stops at launchd', async () => {
+    const tree: Record<number, { command: string; ppid: number }> = {
+      1: { command: '/sbin/launchd', ppid: 0 },
+      100: { command: '/Applications/Hermes.app/Contents/MacOS/Hermes', ppid: 1 },
+      200: { command: '/usr/bin/python3 hermes_cli', ppid: 100 },
+      300: { command: '/opt/homebrew/bin/node src/server.js', ppid: 200 },
+      400: { command: '/opt/homebrew/bin/node src/server.js', ppid: 500 },
+      500: { command: '/bin/zsh', ppid: 600 },
+      600: { command: '/usr/local/bin/claude', ppid: 1 },
+      700: { command: '/opt/homebrew/bin/node src/server.js', ppid: 1 },
+      // the background gateway: launchd -> osascript wrapper -> python -> python -> node
+      800: { command: '/usr/bin/osascript -l JavaScript -e exec /Users/g/.hermes/hermes-agent/.hermes/bin/hermes --run-module hermes_cli.stderr', ppid: 1 },
+      810: { command: '/Users/g/.hermes/tools/python/bin/python3 -I -c import os', ppid: 800 },
+      820: { command: '/Users/g/.hermes/tools/python/bin/python3 -I -c import os', ppid: 810 },
+      830: { command: '/opt/homebrew/bin/node src/server.js', ppid: 820 },
+      // a desktop backend whose own command names the checkout must still resolve to the app above it
+      900: { command: '/Users/g/.hermes/tools/python/bin/python3 /Users/g/.hermes/hermes-agent/hermes_cli/main.py', ppid: 100 },
+      910: { command: '/opt/homebrew/bin/node src/server.js', ppid: 900 }
+    }
+
+    const read = async (pid: number) => tree[pid] ?? null
+    expect(await holderAppOf(300, read)).toBe('hermes')
+    expect(await holderAppOf(910, read)).toBe('hermes')
+    expect(await holderAppOf(830, read)).toBe('hermes-gateway')
+    expect(await holderAppOf(400, read)).toBe('claude')
+    expect(await holderAppOf(700, read)).toBe('other')
+    expect(await holderAppOf(999, read)).toBeNull()
+  })
+})
+
+describe('declaredLane + readBindings', () => {
+  it('reads the CLI declaration from .mcp.json and ignores malformed lane ids', () => {
+    const home = makeHome()
+    const ws = path.join(home, 'tree')
+    fs.mkdirSync(ws)
+    expect(declaredLane(ws)).toBeNull()
+    fs.writeFileSync(path.join(ws, '.mcp.json'), JSON.stringify({ mcpServers: { tradingview: { env: { TV_CDP_CHANNEL: 'dg' } } } }))
+    expect(declaredLane(ws)).toBe('dg')
+    fs.writeFileSync(path.join(ws, '.mcp.json'), JSON.stringify({ mcpServers: { tradingview: { env: { TV_CDP_CHANNEL: '../x' } } } }))
+    expect(declaredLane(ws)).toBeNull()
+  })
+
+  it('tolerates a missing or broken bindings file', () => {
+    const home = makeHome()
+    const file = path.join(home, '.tradingview-mcp', 'hermes_bindings.json')
+    expect(readBindings(file)).toEqual({ sessions: {}, workspaces: {} })
+    fs.writeFileSync(file, '{not json')
+    expect(readBindings(file)).toEqual({ sessions: {}, workspaces: {} })
+  })
+})
+
+describe('registerTvLanesIpc', () => {
+  it('answers get, refuses a bind to an unknown lane, and writes a known one atomically', async () => {
+    const home = makeHome()
+    const dir = path.join(home, '.tradingview-mcp')
+    fs.writeFileSync(path.join(dir, 'channels.json'), JSON.stringify(registry))
+    fs.writeFileSync(path.join(dir, 'channel_status.json'), JSON.stringify(status))
+    const ws = path.join(home, 'tree')
+    fs.mkdirSync(ws)
+    fs.writeFileSync(path.join(ws, '.mcp.json'), JSON.stringify({ mcpServers: { tradingview: { env: { TV_CDP_CHANNEL: 'atlas' } } } }))
+    const now = () => Date.parse('2026-10-01T09:54:09.732Z')
+    registerTvLanesIpc({ homeDir: home, now, readProcess: async () => null })
+    const get = electron.handlers.get('hermes:tv-lanes:get')!
+    const bind = electron.handlers.get('hermes:tv-lanes:bind')!
+
+    const first = (await get({}, [ws, '/etc', 42])) as Awaited<ReturnType<typeof get>> & { declared: Record<string, string>; snapshotAgeS: number }
+    expect(first).toMatchObject({ declared: { [ws]: 'atlas' }, ok: true, snapshotAgeS: 60 })
+
+    expect(await bind({}, { key: ws, lane: 'nope', scope: 'workspace' })).toMatchObject({ ok: false })
+    expect(await bind({}, { key: 'x', lane: 'atlas', scope: 'workspace' })).toMatchObject({ ok: false })
+    expect(await bind({}, { key: ws, lane: 'hermes-atlas', scope: 'workspace' })).toEqual({ error: null, ok: true })
+    const written = JSON.parse(fs.readFileSync(path.join(dir, 'hermes_bindings.json'), 'utf8'))
+    expect(written.workspaces[ws]).toMatchObject({ lane: 'hermes-atlas', since: '2026-10-01T09:54:09.732Z' })
+    expect(fs.readdirSync(dir).filter(n => n.endsWith('.tmp'))).toEqual([])
+
+    const second = (await get({}, [])) as { bindings: { workspaces: Record<string, { lane: string }> } }
+    expect(second.bindings.workspaces[ws].lane).toBe('hermes-atlas')
+    expect(await bind({}, { key: ws, lane: null, scope: 'workspace' })).toEqual({ error: null, ok: true })
+    expect((await get({}, [])) as object).toMatchObject({ bindings: { sessions: {}, workspaces: {} } })
+  })
+
+  it('negative control: an unreadable registry answers ok:false, never an empty lane list', async () => {
+    const home = makeHome()
+    registerTvLanesIpc({ homeDir: home, readProcess: async () => null })
+    const get = electron.handlers.get('hermes:tv-lanes:get')!
+    expect(await get({}, [])).toMatchObject({ lanes: {}, ok: false })
+  })
+})
