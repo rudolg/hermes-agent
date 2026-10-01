@@ -16,7 +16,7 @@
  */
 import { atom } from 'nanostores'
 
-import type { TvLanesSnapshot, TvLaneView } from '../../electron/tv-lanes-types'
+import type { TvLaneRunRequest, TvLanesSnapshot, TvLaneView } from '../../electron/tv-lanes-types'
 
 import { $sessions } from './session'
 
@@ -205,4 +205,17 @@ export async function createTvLane(): Promise<string | null> {
   const r = await api.create()
 
   return r.ok ? null : (r.error ?? 'could not start the new-lane flow')
+}
+
+/** Start one of the lamp's lane scripts (new lane; accept / add / remove an allowed chart). Null = started. */
+export async function runTvLane(request: TvLaneRunRequest): Promise<string | null> {
+  const api = window.hermesDesktop?.tvLanes
+
+  if (!api?.run) {
+    return 'lane actions are not available in this build'
+  }
+
+  const r = await api.run(request)
+
+  return r.ok ? null : (r.error ?? 'could not start the lane action')
 }

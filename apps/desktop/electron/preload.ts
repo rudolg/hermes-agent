@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 
 import type { DesktopProfileRoute } from './desktop-profile'
 import type { HudModifierApi, HudModifierStatus } from './hud-modifier-types'
-import type { TvLaneBindRequest, TvLanesApi } from './tv-lanes-types'
+import type { TvLaneBindRequest, TvLaneRunRequest, TvLanesApi } from './tv-lanes-types'
 import { customWindowControlsEnabled } from './window-controls'
 
 // Which translucency the OS can back. Asked synchronously because the renderer
@@ -427,7 +427,8 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   tvLanes: {
     bind: (request: TvLaneBindRequest) => ipcRenderer.invoke('hermes:tv-lanes:bind', request),
     create: () => ipcRenderer.invoke('hermes:tv-lanes:create'),
-    get: (workspacePaths: string[]) => ipcRenderer.invoke('hermes:tv-lanes:get', workspacePaths)
+    get: (workspacePaths: string[]) => ipcRenderer.invoke('hermes:tv-lanes:get', workspacePaths),
+    run: (request: TvLaneRunRequest) => ipcRenderer.invoke('hermes:tv-lanes:run', request)
   } satisfies TvLanesApi,
   gitRoot: startPath => ipcRenderer.invoke('hermes:fs:gitRoot', startPath),
   revealPath: targetPath => ipcRenderer.invoke('hermes:fs:reveal', targetPath),

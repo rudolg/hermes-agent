@@ -64,9 +64,16 @@ export interface TvLaneBindResult {
   error: null | string
 }
 
+/** One of the lamp's own lane scripts, started detached (they show their own dialogs). The allow-list IS the contract. */
+export type TvLaneRunRequest =
+  | { action: 'create' }
+  | { action: 'chart-accept' | 'chart-add' | 'chart-remove'; lane: string }
+
 export interface TvLanesApi {
   get: (workspacePaths: string[]) => Promise<TvLanesSnapshot>
   bind: (request: TvLaneBindRequest) => Promise<TvLaneBindResult>
   /** Start the lamp's own "new Hermes lane" flow (it asks for the project / name in its own dialogs). */
   create: () => Promise<TvLaneBindResult>
+  /** Run one allow-listed lamp script: new lane, or change a lane's allowed charts (accept / add by id / remove). */
+  run: (request: TvLaneRunRequest) => Promise<TvLaneBindResult>
 }

@@ -196,3 +196,53 @@ describe('registerTvLanesIpc', () => {
     expect(await get({}, [])).toMatchObject({ lanes: {}, ok: false })
   })
 })
+
+describe('hermes:tv-lanes:run', () => {
+  it('starts only allow-listed lamp scripts for a registered lane, with the injected spawner', async () => {
+    const home = makeHome()
+    const dir = path.join(home, '.tradingview-mcp')
+    fs.writeFileSync(path.join(dir, 'channels.json'), JSON.stringify(registry))
+    const lamp = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-lamp-'))
+
+    for (const f of ['tv-accept-chart.py', 'tv-lane-layouts.py', 'tv-lane-new-hermes.py']) {
+      fs.writeFileSync(path.join(lamp, f), '#!/usr/bin/env python3\n')
+    }
+
+    process.env.HERMES_TV_LAMP_DIR = lamp
+    process.env.HERMES_TV_LANE_NEW_SCRIPT = path.join(lamp, 'tv-lane-new-hermes.py')
+    const started: string[][] = []
+
+    const spawnProcess = ((cmd: string, args: string[]) => {
+      started.push([cmd, ...args])
+
+      return { unref: () => undefined }
+    }) as unknown as NonNullable<Parameters<typeof registerTvLanesIpc>[0]['spawnProcess']>
+
+    // the module read the env at import time; re-import for this test's paths
+    vi.resetModules()
+    const mod = await import('./tv-lanes-ipc')
+    mod.registerTvLanesIpc({ homeDir: home, readProcess: async () => null, spawnProcess })
+    const run = electron.handlers.get('hermes:tv-lanes:run')!
+    expect(await run({}, { action: 'chart-add', lane: 'hermes-atlas' })).toEqual({ error: null, ok: true })
+    expect(await run({}, { action: 'chart-remove', lane: 'hermes-atlas' })).toEqual({ error: null, ok: true })
+    expect(await run({}, { action: 'chart-accept', lane: 'atlas' })).toEqual({ error: null, ok: true })
+    expect(await run({}, { action: 'create' })).toEqual({ error: null, ok: true })
+    expect(started.map(a => a.slice(1).map(x => path.basename(x)))).toEqual([
+      ['tv-lane-layouts.py', 'hermes-atlas', 'add'],
+      ['tv-lane-layouts.py', 'hermes-atlas', 'remove'],
+      ['tv-accept-chart.py', 'atlas'],
+      ['tv-lane-new-hermes.py']
+    ])
+
+    // negative controls: an unknown action, an unregistered lane, a lane with shell-shaped text
+    for (const bad of [{ action: 'rm-rf' }, { action: 'chart-add', lane: 'nope' }, { action: 'chart-add', lane: 'atlas; rm' }, 'chart-add', null]) {
+      const res = (await run({}, bad)) as { ok: boolean }
+      expect(res.ok).toBe(false)
+    }
+
+    expect(started.length).toBe(4)
+    delete process.env.HERMES_TV_LAMP_DIR
+    delete process.env.HERMES_TV_LANE_NEW_SCRIPT
+    fs.rmSync(lamp, { force: true, recursive: true })
+  })
+})

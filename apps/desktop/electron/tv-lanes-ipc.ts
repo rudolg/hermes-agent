@@ -17,7 +17,7 @@ import path from 'node:path'
 
 import { ipcMain } from 'electron'
 
-import type { TvLaneBindRequest, TvLaneBindResult, TvLanesSnapshot, TvLaneView } from './tv-lanes-types'
+import type { TvLaneBindRequest, TvLaneBindResult, TvLaneRunRequest, TvLanesSnapshot, TvLaneView } from './tv-lanes-types'
 
 const LANE_ID_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{6,64}$/
@@ -26,9 +26,13 @@ const ANCESTRY_HOPS = 8
 const HOLDER_CACHE_MS = 60_000
 /** The lamp's provisioner (menubar-plugins); overridable for a machine where it lives elsewhere. */
 const NEW_LANE_SCRIPT = process.env.HERMES_TV_LANE_NEW_SCRIPT || '/Users/spinec/src/menubar-plugins/tv-lane-new-hermes.py'
+/** The lamp's lane scripts this app may start (owner's ask 2026-10-01: allowed charts per lane from the dot menu too). */
+const LAMP_DIR = process.env.HERMES_TV_LAMP_DIR || '/Users/spinec/src/menubar-plugins'
 
 export interface TvLanesIpcDeps {
   homeDir: string
+  /** Test seam: the detached process starter; defaults to child_process.spawn. */
+  spawnProcess?: typeof spawn
   /** Test seam: ps ancestry lookup; defaults to /bin/ps. */
   readProcess?: (pid: number) => Promise<null | { command: string; ppid: number }>
   now?: () => number
@@ -229,7 +233,7 @@ export async function holderAppOf(
   return 'other'
 }
 
-export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, now = Date.now }: TvLanesIpcDeps): void {
+export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, now = Date.now, spawnProcess = spawn }: TvLanesIpcDeps): void {
   const dir = stateDir(homeDir)
   const bindingsFile = bindingsPathFor(homeDir)
   const holderCache = new Map<number, { at: number; app: TvLaneView['holderApp'] }>()
@@ -360,22 +364,60 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
     return { error: null, ok: true }
   }
 
-  const create = (): TvLaneBindResult => {
-    if (!fs.existsSync(NEW_LANE_SCRIPT)) {
-      return { error: `provisioner missing: ${NEW_LANE_SCRIPT}`, ok: false }
+  /** The script and arguments for one allow-listed action; null when the request is not on the list. */
+  const scriptFor = (request: unknown): null | { args: string[]; script: string } => {
+    if (!isRecord(request) || typeof request.action !== 'string') {
+      return null
+    }
+
+    const { action } = request as Partial<TvLaneRunRequest>
+
+    if (action === 'create') {
+      return { args: [], script: NEW_LANE_SCRIPT }
+    }
+
+    const lane = (request as { lane?: unknown }).lane
+
+    if (typeof lane !== 'string' || !LANE_ID_RE.test(lane) || !lanesFromRegistry(readJson(path.join(dir, 'channels.json')))[lane]) {
+      return null
+    }
+
+    if (action === 'chart-accept') {
+      return { args: [lane], script: path.join(LAMP_DIR, 'tv-accept-chart.py') }
+    }
+
+    if (action === 'chart-add' || action === 'chart-remove') {
+      return { args: [lane, action === 'chart-add' ? 'add' : 'remove'], script: path.join(LAMP_DIR, 'tv-lane-layouts.py') }
+    }
+
+    return null
+  }
+
+  const run = (request: unknown): TvLaneBindResult => {
+    const target = scriptFor(request)
+
+    if (!target) {
+      return { error: 'not an allowed lane action, or the lane is not in the registry', ok: false }
+    }
+
+    if (!fs.existsSync(target.script)) {
+      return { error: `lamp script missing: ${target.script}`, ok: false }
     }
 
     try {
-      const child = spawn('/usr/bin/python3', [NEW_LANE_SCRIPT], { detached: true, stdio: 'ignore' })
+      const child = spawnProcess('/usr/bin/python3', [target.script, ...target.args], { detached: true, stdio: 'ignore' })
       child.unref()
     } catch (error) {
-      return { error: `provisioner not started: ${error instanceof Error ? error.message : String(error)}`, ok: false }
+      return { error: `script not started: ${error instanceof Error ? error.message : String(error)}`, ok: false }
     }
 
     return { error: null, ok: true }
   }
 
+  const create = (): TvLaneBindResult => run({ action: 'create' })
+
   ipcMain.handle('hermes:tv-lanes:get', async (_event, workspacePaths) => snapshot(workspacePaths))
   ipcMain.handle('hermes:tv-lanes:bind', async (_event, request) => bind(request))
   ipcMain.handle('hermes:tv-lanes:create', async () => create())
+  ipcMain.handle('hermes:tv-lanes:run', async (_event, request) => run(request))
 }
