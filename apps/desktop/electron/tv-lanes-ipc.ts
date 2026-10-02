@@ -365,7 +365,7 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
   }
 
   /** The script and arguments for one allow-listed action; null when the request is not on the list. */
-  const scriptFor = (request: unknown): null | { args: string[]; script: string } => {
+  const scriptFor = (request: unknown): null | { args: string[]; interpreter: string; script: string } => {
     if (!isRecord(request) || typeof request.action !== 'string') {
       return null
     }
@@ -373,7 +373,7 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
     const { action } = request as Partial<TvLaneRunRequest>
 
     if (action === 'create') {
-      return { args: [], script: NEW_LANE_SCRIPT }
+      return { args: [], interpreter: '/usr/bin/python3', script: NEW_LANE_SCRIPT }
     }
 
     const lane = (request as { lane?: unknown }).lane
@@ -383,11 +383,16 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
     }
 
     if (action === 'chart-accept') {
-      return { args: [lane], script: path.join(LAMP_DIR, 'tv-accept-chart.py') }
+      return { args: [lane], interpreter: '/usr/bin/python3', script: path.join(LAMP_DIR, 'tv-accept-chart.py') }
     }
 
     if (action === 'chart-add' || action === 'chart-remove') {
-      return { args: [lane, action === 'chart-add' ? 'add' : 'remove'], script: path.join(LAMP_DIR, 'tv-lane-layouts.py') }
+      return { args: [lane, action === 'chart-add' ? 'add' : 'remove'], interpreter: '/usr/bin/python3', script: path.join(LAMP_DIR, 'tv-lane-layouts.py') }
+    }
+
+    // the tab in front of the automation browser becomes this lane's tab (the lamp's own one-click bind)
+    if (action === 'tab-assign-front') {
+      return { args: [lane], interpreter: '/bin/bash', script: path.join(LAMP_DIR, 'tv-bind-front.sh') }
     }
 
     return null
@@ -405,7 +410,7 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
     }
 
     try {
-      const child = spawnProcess('/usr/bin/python3', [target.script, ...target.args], { detached: true, stdio: 'ignore' })
+      const child = spawnProcess(target.interpreter, [target.script, ...target.args], { detached: true, stdio: 'ignore' })
       child.unref()
     } catch (error) {
       return { error: `script not started: ${error instanceof Error ? error.message : String(error)}`, ok: false }

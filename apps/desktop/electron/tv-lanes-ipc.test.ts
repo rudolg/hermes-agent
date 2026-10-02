@@ -204,7 +204,7 @@ describe('hermes:tv-lanes:run', () => {
     fs.writeFileSync(path.join(dir, 'channels.json'), JSON.stringify(registry))
     const lamp = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-lamp-'))
 
-    for (const f of ['tv-accept-chart.py', 'tv-lane-layouts.py', 'tv-lane-new-hermes.py']) {
+    for (const f of ['tv-accept-chart.py', 'tv-lane-layouts.py', 'tv-lane-new-hermes.py', 'tv-bind-front.sh']) {
       fs.writeFileSync(path.join(lamp, f), '#!/usr/bin/env python3\n')
     }
 
@@ -227,11 +227,13 @@ describe('hermes:tv-lanes:run', () => {
     expect(await run({}, { action: 'chart-remove', lane: 'hermes-atlas' })).toEqual({ error: null, ok: true })
     expect(await run({}, { action: 'chart-accept', lane: 'atlas' })).toEqual({ error: null, ok: true })
     expect(await run({}, { action: 'create' })).toEqual({ error: null, ok: true })
-    expect(started.map(a => a.slice(1).map(x => path.basename(x)))).toEqual([
-      ['tv-lane-layouts.py', 'hermes-atlas', 'add'],
-      ['tv-lane-layouts.py', 'hermes-atlas', 'remove'],
-      ['tv-accept-chart.py', 'atlas'],
-      ['tv-lane-new-hermes.py']
+    expect(await run({}, { action: 'tab-assign-front', lane: 'hermes-atlas' })).toEqual({ error: null, ok: true })
+    expect(started.map(a => a.map(x => path.basename(x)))).toEqual([
+      ['python3', 'tv-lane-layouts.py', 'hermes-atlas', 'add'],
+      ['python3', 'tv-lane-layouts.py', 'hermes-atlas', 'remove'],
+      ['python3', 'tv-accept-chart.py', 'atlas'],
+      ['python3', 'tv-lane-new-hermes.py'],
+      ['bash', 'tv-bind-front.sh', 'hermes-atlas']
     ])
 
     // negative controls: an unknown action, an unregistered lane, a lane with shell-shaped text
@@ -240,7 +242,7 @@ describe('hermes:tv-lanes:run', () => {
       expect(res.ok).toBe(false)
     }
 
-    expect(started.length).toBe(4)
+    expect(started.length).toBe(5)
     delete process.env.HERMES_TV_LAMP_DIR
     delete process.env.HERMES_TV_LANE_NEW_SCRIPT
     fs.rmSync(lamp, { force: true, recursive: true })

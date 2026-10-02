@@ -275,6 +275,13 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
             </DropdownMenuLabel>
             <DropdownMenuItem
               onSelect={() =>
+                void start({ action: 'tab-assign-front', lane: bound.id }, `The Chrome tab in front becomes ${bound.id}'s tab (its old binding is replaced)`)
+              }
+            >
+              Assign the Chrome tab in front to {bound.id}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() =>
                 void start({ action: 'chart-accept', lane: bound.id }, `Accepting the chart ${bound.id}'s tab shows; the lane restarts its controller (/reload-mcp)`)
               }
             >
