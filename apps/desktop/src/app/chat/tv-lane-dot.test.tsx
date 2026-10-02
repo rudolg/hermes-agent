@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { tvServerRows } from './tv-lane-dot'
+import { tvServerRows } from '@/lib/tv-server-rows'
 
 describe('tvServerRows', () => {
   it('lists the tradingview entries with lane, capability, state flags, in name order', () => {

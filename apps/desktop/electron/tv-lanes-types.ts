@@ -26,6 +26,8 @@ export interface TvLaneView {
   slugs: string[]
   tabPresent: boolean
   reasons: string[]
+  /** The bound tab's CDP target id (the badge shows its first six characters), null when no tab is bound. */
+  targetId: null | string
 }
 
 export interface TvLaneBinding {

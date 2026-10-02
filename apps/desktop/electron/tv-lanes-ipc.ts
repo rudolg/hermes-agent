@@ -81,6 +81,7 @@ export function lanesFromRegistry(registry: unknown): Record<string, TvLaneView>
       reasons: [],
       slugs: [],
       tabPresent: false,
+      targetId: null,
       up: false
     }
   }
@@ -122,6 +123,9 @@ export function applyStatus(lanes: Record<string, TvLaneView>, status: unknown):
     lane.slugs = strList(charts.slugs)
     lane.tabPresent = charts.tab_present === true
     lane.reasons = strList(entry.reasons)
+    const target = isRecord(entry.target) ? entry.target : {}
+    const binding = isRecord(entry.binding) ? entry.binding : {}
+    lane.targetId = str(target.id) ?? str(binding.target_id)
   }
 
   return str(status.generated_at)

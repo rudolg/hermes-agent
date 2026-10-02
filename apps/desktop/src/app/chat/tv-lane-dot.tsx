@@ -23,10 +23,10 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { getHermesConfigRecord, setMcpServerEnabled } from '@/hermes'
-import { getServers, serverEnabled } from '@/lib/mcp-servers'
+import { type TvServerRow, tvServerRows } from '@/lib/tv-server-rows'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
-import { $tvLanes, bindTvLane, createTvLane, resolveTvLane, runTvLane, type TvLaneDotState } from '@/store/tv-lanes'
+import { $tvLanes, $tvServerRows, bindTvLane, createTvLane, laneWritesEnabled, resolveTvLane, runTvLane, type TvLaneDotState } from '@/store/tv-lanes'
 
 // Same size as the chat-activity dot; the faint grey hollow for "no lane" is wanted (owner, 2026-10-01: "grey is very
 // faint - good"), so a tree without a lane stays quiet and a bound one stands out.
@@ -52,42 +52,6 @@ const STATE_WORD: Record<TvLaneDotState, string> = {
   unlinked: 'no lane (click to link)'
 }
 
-/** One configured TradingView MCP entry, as the menu shows it. */
-export interface TvServerRow {
-  name: string
-  lane: null | string
-  write: boolean
-  enabled: boolean
-  lazy: boolean
-  idleS: null | number
-  gatewayOut: boolean
-}
-
-const str = (v: unknown): null | string => (typeof v === 'string' && v ? v : null)
-const bool = (v: unknown): boolean => v === true || v === 'true' || v === 1 || v === '1'
-
-/** The tradingview* entries of the app's config, in name order. */
-export function tvServerRows(config: null | { mcp_servers?: unknown }): TvServerRow[] {
-  return Object.entries(getServers(config))
-    .filter(([name]) => name.startsWith('tradingview'))
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, cfg]) => {
-      const env = typeof cfg.env === 'object' && cfg.env !== null ? (cfg.env as Record<string, unknown>) : {}
-      const caps = str(env.TV_MCP_CAPABILITIES) ?? ''
-      const idle = typeof cfg.idle_timeout_seconds === 'number' ? cfg.idle_timeout_seconds : Number(cfg.idle_timeout_seconds)
-
-      return {
-        enabled: serverEnabled(cfg),
-        gatewayOut: cfg.gateway === false || cfg.gateway === 'false',
-        idleS: Number.isFinite(idle) && idle > 0 ? idle : null,
-        lane: str(env.TV_CDP_CHANNEL),
-        lazy: bool(cfg.lazy),
-        name,
-        write: /chart_write|pine_write|write/.test(caps)
-      }
-    })
-}
-
 export interface TvLaneDotProps {
   className?: string
   cwd?: null | string
@@ -103,6 +67,10 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
   const [open, setOpen] = useState(false)
   const [servers, setServers] = useState<null | TvServerRow[]>(null)
   const r = resolveTvLane(snapshot, { cwd, sessionId, workspacePath })
+  const polledRows = useStore($tvServerRows)
+  // READ vs WRITE at a glance (owner, 2026-10-02: "maybe green is read and two green is write"): a second dot when the
+  // bound lane's entry has chart writes enabled. The CLASS, not a live lease: each write is still gated per chart.
+  const writes = laneWritesEnabled(polledRows, r.laneId)
 
   // The server list is read when the menu opens (one config fetch), never on every poll.
   useEffect(() => {
@@ -139,7 +107,8 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
   const lanes = Object.values(snapshot?.lanes ?? {}).sort((a, b) => a.id.localeCompare(b.id))
   const hermesLanes = lanes.filter(l => l.id.startsWith('hermes'))
   const scopeKey = workspacePath ?? null
-  const label = `TradingView lane: ${STATE_WORD[r.state]} — ${r.detail}`
+  const rights = r.laneId && r.state !== 'unlinked' ? (writes ? ' · WRITES ENABLED (two dots)' : ' · read-only') : ''
+  const label = `TradingView lane: ${STATE_WORD[r.state]}${rights} — ${r.detail}`
 
   const apply = async (scope: 'session' | 'workspace', key: null | string, lane: null | string) => {
     if (!key) {
@@ -232,7 +201,7 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
       <DropdownMenuTrigger asChild>
         <button
           aria-label={label}
-          className={cn('flex size-4 shrink-0 items-center justify-center bg-transparent', className)}
+          className={cn('flex h-4 shrink-0 items-center justify-center bg-transparent px-0.5', className)}
           data-tv-lane-state={r.state}
           onClick={e => e.stopPropagation()}
           onPointerDown={e => e.stopPropagation()}
@@ -240,6 +209,7 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
           type="button"
         >
           <span aria-hidden className={cn(DOT_BASE, DOT_CLASS[r.state])} />
+          {writes && r.state !== 'unlinked' ? <span aria-hidden className={cn(DOT_BASE, 'ml-0.5', DOT_CLASS[r.state])} /> : null}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-72">

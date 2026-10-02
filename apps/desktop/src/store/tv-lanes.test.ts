@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { TvLanesSnapshot, TvLaneView } from '../../electron/tv-lanes-types'
 
-import { resolveTvLane, workspaceKeyFor, workspacePathsOf } from './tv-lanes'
+import { laneWritesEnabled, resolveTvLane, workspaceKeyFor, workspacePathsOf } from './tv-lanes'
 
 const lane = (over: Partial<TvLaneView> = {}): TvLaneView => ({
   active: true,
@@ -25,6 +25,7 @@ const lane = (over: Partial<TvLaneView> = {}): TvLaneView => ({
   reasons: [],
   slugs: ['N06Rmf2K'],
   tabPresent: true,
+  targetId: 'A764ACE49853ACC16FF94F8A02088A79',
   up: true,
   ...over
 })
@@ -55,6 +56,7 @@ describe('resolveTvLane', () => {
     expect(r.state).toBe('live')
     expect(r.source).toBe('workspace')
     expect(r.detail).toContain('92998')
+    expect(r.detail).toContain('tab A764AC')
     // a chat deeper in the tree inherits the tree's binding
     expect(resolveTvLane(snap(), chat).state).toBe('live')
   })
@@ -119,5 +121,21 @@ describe('workspacePathsOf', () => {
     ])
 
     expect(paths).toEqual(['/x/y', '/x'])
+  })
+})
+
+describe('laneWritesEnabled', () => {
+  it('is true only for an enabled entry that drives the lane with chart writes on', () => {
+    const rows = [
+      { enabled: true, gatewayOut: true, idleS: null, lane: 'hermes', lazy: false, name: 'tradingview_hermes', write: false },
+      { enabled: true, gatewayOut: true, idleS: null, lane: 'hermes-atlas', lazy: false, name: 'tradingview_hermes_atlas', write: true },
+      { enabled: false, gatewayOut: true, idleS: null, lane: 'hermes-x', lazy: false, name: 'tradingview_hermes_x', write: true }
+    ]
+
+    expect(laneWritesEnabled(rows, 'hermes-atlas')).toBe(true)
+    expect(laneWritesEnabled(rows, 'hermes')).toBe(false)
+    expect(laneWritesEnabled(rows, 'hermes-x')).toBe(false)
+    expect(laneWritesEnabled(rows, null)).toBe(false)
+    expect(laneWritesEnabled(null, 'hermes-atlas')).toBe(false)
   })
 })

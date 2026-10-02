@@ -16,6 +16,9 @@
  */
 import { atom } from 'nanostores'
 
+import { getHermesConfigRecord } from '@/hermes'
+import { type TvServerRow, tvServerRows } from '@/lib/tv-server-rows'
+
 import type { TvLaneRunRequest, TvLanesSnapshot, TvLaneView } from '../../electron/tv-lanes-types'
 
 import { $sessions } from './session'
@@ -36,6 +39,13 @@ export interface TvLaneResolution {
 }
 
 export const $tvLanes = atom<null | TvLanesSnapshot>(null)
+/** The app's tradingview* MCP entries, refreshed with the lane poll: which lane each drives and whether it may write. */
+export const $tvServerRows = atom<null | TvServerRow[]>(null)
+
+/** True when some enabled entry drives this lane with chart writes on (the capability class, not a live lease). */
+export function laneWritesEnabled(rows: null | TvServerRow[], laneId: null | string): boolean {
+  return !!laneId && !!rows?.some(r => r.enabled && r.lane === laneId && r.write)
+}
 
 const normalizePath = (p: null | string | undefined): string => (p ?? '').replace(/[/\\]+$/, '')
 
@@ -127,7 +137,7 @@ export function resolveTvLane(
   const chartOk = lane.intended !== null && lane.slugs.includes(lane.intended)
 
   if (lane.up && lane.healthVerdict === 'TAB_OK' && chartOk) {
-    return { detail: `${name} is live: Hermes holds it (pid ${lane.holderPid}), tab OK on chart ${lane.intended}`, lane, laneId, source, state: 'live' }
+    return { detail: `${name} is live: Hermes holds it (pid ${lane.holderPid}), tab ${(lane.targetId ?? '').slice(0, 6).toUpperCase() || '?'} OK on chart ${lane.intended}`, lane, laneId, source, state: 'live' }
   }
 
   const why = lane.healthVerdict && lane.healthVerdict !== 'TAB_OK' ? lane.healthVerdict.toLowerCase().replace(/_/g, ' ') : !chartOk ? 'chart not on its tab' : 'not up'
@@ -166,6 +176,12 @@ export async function refreshTvLanes(): Promise<void> {
 
   try {
     $tvLanes.set(await api.get(workspacePathsOf($sessions.get())))
+
+    try {
+      $tvServerRows.set(tvServerRows((await getHermesConfigRecord()) as { mcp_servers?: unknown }))
+    } catch {
+      // the config read failed: keep the last rows
+    }
   } catch {
     // keep the last snapshot; the dot goes stale by age on its own
   } finally {
