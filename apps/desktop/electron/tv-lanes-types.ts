@@ -35,6 +35,22 @@ export interface TvLaneBinding {
   since: string
 }
 
+/** THE WRITE SWITCH (owner, 2026-10-02: "assign write lease to only one process"): the one global write lease every
+ *  lane's write tools check, read from ~/.tradingview-mcp/lease at answer time. */
+export interface TvWriteLease {
+  expiresAt: null | string
+  /** True when a lease exists, is unexpired and carries the current revocation epoch. */
+  held: boolean
+  /** False when the holder pid is proven gone (the lease then needs taking again); null when unknowable. */
+  holderAlive: boolean | null
+  holderLane: null | string
+  holderPid: null | number
+  /** The holder reports a write running right now (a takeover or release waits for it). */
+  inFlight: boolean
+  /** Why `held` is false: no_lease | expired | revoked | lease_unreadable | epoch_unavailable; null when held. */
+  why: null | string
+}
+
 /** The whole answer to one `hermes:tv-lanes:get`. */
 export interface TvLanesSnapshot {
   ok: boolean
@@ -51,6 +67,8 @@ export interface TvLanesSnapshot {
   declared: Record<string, string>
   /** Where the bindings file lives (for the tooltip / a reveal). */
   bindingsPath: string
+  /** The one write lease (the switch); EMPTY (held false, why no_lease) when nobody holds it. */
+  writeLease: TvWriteLease
 }
 
 export interface TvLaneBindRequest {
@@ -69,7 +87,7 @@ export interface TvLaneBindResult {
 /** One of the lamp's own lane scripts, started detached (they show their own dialogs). The allow-list IS the contract. */
 export type TvLaneRunRequest =
   | { action: 'create' }
-  | { action: 'chart-accept' | 'chart-add' | 'chart-remove' | 'tab-assign-front'; lane: string }
+  | { action: 'chart-accept' | 'chart-add' | 'chart-remove' | 'lease-release' | 'lease-take' | 'tab-assign-front' | 'tab-focus'; lane: string }
 
 export interface TvLanesApi {
   get: (workspacePaths: string[]) => Promise<TvLanesSnapshot>

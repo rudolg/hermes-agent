@@ -204,7 +204,7 @@ describe('hermes:tv-lanes:run', () => {
     fs.writeFileSync(path.join(dir, 'channels.json'), JSON.stringify(registry))
     const lamp = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-lamp-'))
 
-    for (const f of ['tv-accept-chart.py', 'tv-lane-layouts.py', 'tv-lane-new-hermes.py', 'tv-bind-front.sh']) {
+    for (const f of ['tv-accept-chart.py', 'tv-lane-layouts.py', 'tv-lane-new-hermes.py', 'tv-bind-front.sh', 'tv-write-lease.py', 'tv-focus-channel.sh']) {
       fs.writeFileSync(path.join(lamp, f), '#!/usr/bin/env python3\n')
     }
 
@@ -228,12 +228,18 @@ describe('hermes:tv-lanes:run', () => {
     expect(await run({}, { action: 'chart-accept', lane: 'atlas' })).toEqual({ error: null, ok: true })
     expect(await run({}, { action: 'create' })).toEqual({ error: null, ok: true })
     expect(await run({}, { action: 'tab-assign-front', lane: 'hermes-atlas' })).toEqual({ error: null, ok: true })
+    expect(await run({}, { action: 'lease-take', lane: 'hermes-atlas' })).toEqual({ error: null, ok: true })
+    expect(await run({}, { action: 'lease-release', lane: 'hermes-atlas' })).toEqual({ error: null, ok: true })
+    expect(await run({}, { action: 'tab-focus', lane: 'hermes-atlas' })).toEqual({ error: null, ok: true })
     expect(started.map(a => a.map(x => path.basename(x)))).toEqual([
       ['python3', 'tv-lane-layouts.py', 'hermes-atlas', 'add'],
       ['python3', 'tv-lane-layouts.py', 'hermes-atlas', 'remove'],
       ['python3', 'tv-accept-chart.py', 'atlas'],
       ['python3', 'tv-lane-new-hermes.py'],
-      ['bash', 'tv-bind-front.sh', 'hermes-atlas']
+      ['bash', 'tv-bind-front.sh', 'hermes-atlas'],
+      ['python3', 'tv-write-lease.py', 'hermes-atlas', 'take'],
+      ['python3', 'tv-write-lease.py', 'hermes-atlas', 'release'],
+      ['bash', 'tv-focus-channel.sh', 'hermes-atlas']
     ])
 
     // negative controls: an unknown action, an unregistered lane, a lane with shell-shaped text
@@ -242,9 +248,44 @@ describe('hermes:tv-lanes:run', () => {
       expect(res.ok).toBe(false)
     }
 
-    expect(started.length).toBe(5)
+    expect(started.length).toBe(8)
     delete process.env.HERMES_TV_LAMP_DIR
     delete process.env.HERMES_TV_LANE_NEW_SCRIPT
     fs.rmSync(lamp, { force: true, recursive: true })
+  })
+})
+
+describe('readWriteLease — the switch as the dot reads it', () => {
+  const T0 = Date.parse('2026-10-02T08:00:00.000Z')
+
+  const write = (dir: string, lease: Record<string, unknown>, epoch = '3') => {
+    fs.mkdirSync(path.join(dir, 'lease'), { recursive: true })
+    fs.writeFileSync(path.join(dir, 'lease', 'revocation_epoch'), `${epoch}\n`)
+    fs.writeFileSync(path.join(dir, 'lease', 'write_lease.json'), JSON.stringify({ epoch: '3', expires_at: '2026-10-02T09:00:00.000Z', fencing_token: '11', holder_lane: 'hermes-atlas', holder_pid: 4242, schema: 'tv.write_lease/v1', ...lease }))
+  }
+
+  it('held only when present, well-formed, unexpired and on the current epoch; the holder and liveness named', async () => {
+    const { readWriteLease } = await import('./tv-lanes-ipc')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-lease-'))
+    expect(readWriteLease(dir, () => T0)).toMatchObject({ held: false, holderLane: null, why: 'no_lease' })
+    write(dir, {})
+    expect(readWriteLease(dir, () => T0, () => true)).toMatchObject({ expiresAt: '2026-10-02T09:00:00.000Z', held: true, holderAlive: true, holderLane: 'hermes-atlas', holderPid: 4242, inFlight: false, why: null })
+    expect(readWriteLease(dir, () => T0 + 2 * 3_600_000, () => true)).toMatchObject({ held: false, why: 'expired' })
+    write(dir, {}, '4')
+    expect(readWriteLease(dir, () => T0, () => false)).toMatchObject({ held: false, holderAlive: false, why: 'revoked' })
+    fs.writeFileSync(path.join(dir, 'lease', 'in_flight.hermes-atlas.json'), JSON.stringify({ count: 1, pid: 4242, pid_start: 's', updated_at: new Date(T0 - 1000).toISOString() }))
+    write(dir, {})
+    expect(readWriteLease(dir, () => T0, () => true)).toMatchObject({ held: true, inFlight: true })
+    expect(readWriteLease(dir, () => T0, () => false)).toMatchObject({ held: true, holderAlive: false, inFlight: false })
+    fs.writeFileSync(path.join(dir, 'lease', 'in_flight.hermes-atlas.json'), '{broken')
+    expect(readWriteLease(dir, () => T0, () => true)).toMatchObject({ held: true, inFlight: true })
+    fs.rmSync(path.join(dir, 'lease', 'in_flight.hermes-atlas.json'))
+    fs.writeFileSync(path.join(dir, 'lease', 'write_lease.json'), '{not json')
+    expect(readWriteLease(dir, () => T0)).toMatchObject({ held: false, why: 'lease_unreadable' })
+    fs.writeFileSync(path.join(dir, 'lease', 'write_lease.json'), JSON.stringify({ schema: 'something-else' }))
+    expect(readWriteLease(dir, () => T0)).toMatchObject({ held: false, why: 'lease_unreadable' })
+    write(dir, {})
+    fs.writeFileSync(path.join(dir, 'lease', 'revocation_epoch'), '')
+    expect(readWriteLease(dir, () => T0)).toMatchObject({ held: false, why: 'epoch_unavailable' })
   })
 })

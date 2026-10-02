@@ -26,7 +26,7 @@ import { getHermesConfigRecord, setMcpServerEnabled } from '@/hermes'
 import { type TvServerRow, tvServerRows } from '@/lib/tv-server-rows'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'
-import { $tvLanes, $tvServerRows, bindTvLane, createTvLane, laneWritesEnabled, resolveTvLane, runTvLane, type TvLaneDotState } from '@/store/tv-lanes'
+import { $tvLanes, $tvServerRows, bindTvLane, createTvLane, laneHoldsWriteLease, laneWritesEnabled, resolveTvLane, runTvLane, type TvLaneDotState } from '@/store/tv-lanes'
 
 // Same size as the chat-activity dot; the faint grey hollow for "no lane" is wanted (owner, 2026-10-01: "grey is very
 // faint - good"), so a tree without a lane stays quiet and a bound one stands out.
@@ -40,6 +40,13 @@ const DOT_CLASS: Record<TvLaneDotState, string> = {
   live: 'bg-emerald-500',
   stale: 'border border-amber-500',
   unlinked: 'border border-(--ui-text-quaternary)'
+}
+
+/** A lease expiry as the operator reads a clock. */
+const hhmm = (iso: null | string): string => {
+  const t = iso ? Date.parse(iso) : NaN
+
+  return Number.isFinite(t) ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '?'
 }
 
 const STATE_WORD: Record<TvLaneDotState, string> = {
@@ -68,9 +75,12 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
   const [servers, setServers] = useState<null | TvServerRow[]>(null)
   const r = resolveTvLane(snapshot, { cwd, sessionId, workspacePath })
   const polledRows = useStore($tvServerRows)
-  // READ vs WRITE at a glance (owner, 2026-10-02: "maybe green is read and two green is write"): a second dot when the
-  // bound lane's entry has chart writes enabled. The CLASS, not a live lease: each write is still gated per chart.
+  // READ vs WRITE at a glance (owner, 2026-10-02: "maybe green is read and two green is write"): a second dot when THIS
+  // lane holds the one write lease — the switch (owner: "assign write lease to only one process"). The entry's write
+  // CLASS alone lights nothing: without the lease every write refuses in the server.
+  const holdsLease = laneHoldsWriteLease(snapshot, r.laneId)
   const writes = laneWritesEnabled(polledRows, r.laneId)
+  const lease = snapshot?.writeLease ?? null
 
   // The server list is read when the menu opens (one config fetch), never on every poll.
   useEffect(() => {
@@ -107,7 +117,14 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
   const lanes = Object.values(snapshot?.lanes ?? {}).sort((a, b) => a.id.localeCompare(b.id))
   const hermesLanes = lanes.filter(l => l.id.startsWith('hermes'))
   const scopeKey = workspacePath ?? null
-  const rights = r.laneId && r.state !== 'unlinked' ? (writes ? ' · WRITES ENABLED (two dots)' : ' · read-only') : ''
+
+  const leaseWord = !lease?.held
+    ? 'read-only: nobody holds the write lease'
+    : lease.holderLane === r.laneId
+      ? `holds the WRITE LEASE until ${hhmm(lease.expiresAt)} (two dots)`
+      : `read-only: the write lease is held by ${lease.holderLane}`
+
+  const rights = r.laneId && r.state !== 'unlinked' ? ` · ${leaseWord}${writes ? '' : ' · entry pinned read-only'}` : ''
   const label = `TradingView lane: ${STATE_WORD[r.state]}${rights} — ${r.detail}`
 
   const apply = async (scope: 'session' | 'workspace', key: null | string, lane: null | string) => {
@@ -209,7 +226,7 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
           type="button"
         >
           <span aria-hidden className={cn(DOT_BASE, DOT_CLASS[r.state])} />
-          {writes && r.state !== 'unlinked' ? <span aria-hidden className={cn(DOT_BASE, 'ml-0.5', DOT_CLASS[r.state])} /> : null}
+          {holdsLease && r.state !== 'unlinked' ? <span aria-hidden className={cn(DOT_BASE, 'ml-0.5', DOT_CLASS[r.state])} /> : null}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-72">
@@ -268,6 +285,31 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
             >
               Remove an allowed chart…
             </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() =>
+                void start({ action: 'tab-focus', lane: bound.id }, `Bringing ${bound.id}'s tab forward; with no open tab it asks before opening the most recent chart`)
+              }
+            >
+              Bring {bound.id}'s tab to the front (opens it if closed — asks first)
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>
+              Write lease:{' '}
+              <span className="font-normal">
+                {lease?.held
+                  ? `held by ${lease.holderLane} (server pid ${lease.holderPid ?? '?'}) until ${hhmm(lease.expiresAt)}${lease.holderAlive === false ? ' — holder process GONE' : ''}${lease.inFlight ? ' — a write in flight' : ''}`
+                  : 'nobody — every lane is read-only'}
+              </span>
+            </DropdownMenuLabel>
+            {lease?.held && lease.holderLane === bound.id ? (
+              <DropdownMenuItem onSelect={() => void start({ action: 'lease-release', lane: bound.id }, `Releasing the write lease held by ${bound.id}`)}>
+                Release the write lease held by {bound.id}
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem onSelect={() => void start({ action: 'lease-take', lane: bound.id }, `Taking the write lease for ${bound.id}`)}>
+                {lease?.held ? `Take the write lease over from ${lease.holderLane} for ${bound.id} (asks first; revokes it)` : `Take the write lease for ${bound.id}`}
+              </DropdownMenuItem>
+            )}
           </>
         ) : null}
         <DropdownMenuSeparator />
@@ -280,9 +322,10 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
           servers.map(row => (
             <DropdownMenuItem key={row.name} onSelect={() => void toggleServer(row)}>
               <span aria-hidden className={cn(DOT_BASE, 'mr-1.5', row.enabled ? 'bg-emerald-500' : 'border border-(--ui-text-quaternary)')} />
-              <span className="font-mono text-xs">{row.name}</span>
+              <span className="font-mono text-xs">{row.lane ? `lane ${row.lane}` : row.name}</span>
               <span className="ml-1 truncate text-(--ui-text-tertiary)">
-                {row.lane ?? 'no lane'} · {row.write ? 'WRITE' : 'read-only'} · {loadedWord(row)}
+                {row.lane ? `entry ${row.name} · ` : ''}
+                {row.write ? 'writes via the lease' : 'read-only (entry pinned)'} · {loadedWord(row)}
                 {row.lazy ? ' · lazy' : ''}
                 {row.idleS ? ` · idle ${Math.round(row.idleS / 60)} min` : ''}
                 {row.gatewayOut ? '' : ' · gateway may load it'}

@@ -47,6 +47,11 @@ export function laneWritesEnabled(rows: null | TvServerRow[], laneId: null | str
   return !!laneId && !!rows?.some(r => r.enabled && r.lane === laneId && r.write)
 }
 
+/** THE WRITE SWITCH: true only when the one write lease is held, valid, by THIS lane's running server. */
+export function laneHoldsWriteLease(snapshot: null | TvLanesSnapshot, laneId: null | string): boolean {
+  return !!laneId && !!snapshot?.writeLease?.held && snapshot.writeLease.holderLane === laneId
+}
+
 const normalizePath = (p: null | string | undefined): string => (p ?? '').replace(/[/\\]+$/, '')
 
 /** The longest bound workspace that is `cwd` itself or a parent of it. */

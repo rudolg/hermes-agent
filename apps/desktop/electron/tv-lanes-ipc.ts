@@ -11,13 +11,13 @@
  * A bind writes the bindings file atomically (temp + rename) and refuses a lane the registry does not know; `create`
  * hands off to the lamp's own one-click "new Hermes lane" script, which asks for the project / name in its dialogs.
  */
-import { execFile, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
 import { ipcMain } from 'electron'
 
-import type { TvLaneBindRequest, TvLaneBindResult, TvLaneRunRequest, TvLanesSnapshot, TvLaneView } from './tv-lanes-types'
+import type { TvLaneBindRequest, TvLaneBindResult, TvLaneRunRequest, TvLanesSnapshot, TvLaneView, TvWriteLease } from './tv-lanes-types'
 
 const LANE_ID_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{6,64}$/
@@ -53,6 +53,100 @@ function readJson(file: string): unknown {
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const str = (v: unknown): null | string => (typeof v === 'string' && v.length > 0 ? v : null)
+
+const EMPTY_LEASE: TvWriteLease = { expiresAt: null, held: false, holderAlive: null, holderLane: null, holderPid: null, inFlight: false, why: 'no_lease' }
+
+/** Is this exact process instance alive? pid liveness by signal 0, identity by `ps lstart` (the claims' own notion):
+ *  a recycled pid is NOT alive; an instance whose start cannot be compared counts as alive (never reported gone). */
+function instanceAlive(pid: number, pidStart: unknown): boolean | null {
+  try {
+    process.kill(pid, 0)
+  } catch (error) {
+    if ((error as { code?: string }).code !== 'EPERM') {
+      return false
+    }
+  }
+
+  let live = ''
+
+  try {
+    live = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' }, timeout: 4000 }).trim()
+  } catch {
+    live = ''
+  }
+
+  if (!live || typeof pidStart !== 'string' || !pidStart) {
+    return true
+  }
+
+  return live === pidStart
+}
+
+/** A write is in flight when the marker exists, its count is positive and ITS process instance is alive; a marker that
+ *  exists but cannot be read counts as in flight (cannot tell is never idle). Age plays no part. */
+function inFlightFor(leaseDir: string, lane: string, alive: (pid: number, pidStart: unknown) => boolean | null): boolean {
+  const file = path.join(leaseDir, `in_flight.${lane}.json`)
+
+  if (!fs.existsSync(file)) {
+    return false
+  }
+
+  const doc = readJson(file)
+
+  if (!isRecord(doc) || typeof doc.pid !== 'number' || typeof doc.count !== 'number') {
+    return true
+  }
+
+  return doc.count > 0 && alive(doc.pid, doc.pid_start) !== false
+}
+
+/** THE WRITE SWITCH, read at answer time from the files the servers check (cdp-channels src/core/write_lease.js):
+ *  the lease is held only when it exists, is well-formed, unexpired, and carries the CURRENT revocation epoch. */
+export function readWriteLease(dir: string, now: () => number = Date.now, alive: (pid: number, pidStart: unknown) => boolean | null = instanceAlive): TvWriteLease {
+  const leaseDir = path.join(dir, 'lease')
+  const file = path.join(leaseDir, 'write_lease.json')
+
+  if (!fs.existsSync(file)) {
+    return EMPTY_LEASE
+  }
+
+  const raw = readJson(file)
+
+  if (!isRecord(raw) || raw.schema !== 'tv.write_lease/v1' || typeof raw.holder_lane !== 'string') {
+    return { ...EMPTY_LEASE, why: 'lease_unreadable' }
+  }
+
+  const holderLane = raw.holder_lane
+  const holderPid = typeof raw.holder_pid === 'number' && Number.isInteger(raw.holder_pid) && raw.holder_pid > 1 ? raw.holder_pid : null
+  const expiresAt = str(raw.expires_at)
+  let epoch: null | string = null
+
+  try {
+    const text = fs.readFileSync(path.join(leaseDir, 'revocation_epoch'), 'utf8').trim()
+    epoch = /^[0-9]+$/.test(text) ? text : null
+  } catch {
+    epoch = null
+  }
+
+  const base = { expiresAt, held: false, holderAlive: holderPid === null ? null : alive(holderPid, raw.holder_pid_start), holderLane, holderPid, inFlight: inFlightFor(leaseDir, holderLane, alive) }
+
+  if (epoch === null) {
+    return { ...base, why: 'epoch_unavailable' }
+  }
+
+  if (String(raw.epoch) !== epoch) {
+    return { ...base, why: 'revoked' }
+  }
+
+  const expMs = expiresAt ? Date.parse(expiresAt) : NaN
+
+  if (!Number.isFinite(expMs) || expMs <= now()) {
+    return { ...base, why: 'expired' }
+  }
+
+  return { ...base, held: true, why: null }
+}
+
 const strList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
 
 /** Registry rows -> lane views with no snapshot data yet. */
@@ -251,7 +345,8 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
       generatedAt: null,
       lanes: {},
       ok: true,
-      snapshotAgeS: null
+      snapshotAgeS: null,
+      writeLease: EMPTY_LEASE
     }
 
     const registry = readJson(path.join(dir, 'channels.json'))
@@ -302,7 +397,8 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
       declared,
       generatedAt,
       lanes,
-      snapshotAgeS: Number.isFinite(ageS) ? ageS : null
+      snapshotAgeS: Number.isFinite(ageS) ? ageS : null,
+      writeLease: readWriteLease(dir)
     }
   }
 
@@ -397,6 +493,17 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
     // the tab in front of the automation browser becomes this lane's tab (the lamp's own one-click bind)
     if (action === 'tab-assign-front') {
       return { args: [lane], interpreter: '/bin/bash', script: path.join(LAMP_DIR, 'tv-bind-front.sh') }
+    }
+
+    // THE WRITE SWITCH (owner, 2026-10-02): take or release the one write lease for this lane through the lamp's own
+    // script — it asks before a takeover and names the holder in its dialogs; the servers enforce the lease.
+    if (action === 'lease-take' || action === 'lease-release') {
+      return { args: [lane, action === 'lease-take' ? 'take' : 'release'], interpreter: '/usr/bin/python3', script: path.join(LAMP_DIR, 'tv-write-lease.py') }
+    }
+
+    // bring this lane's tab forward; with no open tab the script says so and ASKS before opening its most recent chart
+    if (action === 'tab-focus') {
+      return { args: [lane], interpreter: '/bin/bash', script: path.join(LAMP_DIR, 'tv-focus-channel.sh') }
     }
 
     return null

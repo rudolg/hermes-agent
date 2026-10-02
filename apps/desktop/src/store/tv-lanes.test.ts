@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { TvLanesSnapshot, TvLaneView } from '../../electron/tv-lanes-types'
 
-import { laneWritesEnabled, resolveTvLane, workspaceKeyFor, workspacePathsOf } from './tv-lanes'
+import { laneHoldsWriteLease, laneWritesEnabled, resolveTvLane, workspaceKeyFor, workspacePathsOf } from './tv-lanes'
 
 const lane = (over: Partial<TvLaneView> = {}): TvLaneView => ({
   active: true,
@@ -39,6 +39,7 @@ const snap = (over: Partial<TvLanesSnapshot> = {}, laneOver: Partial<TvLaneView>
   lanes: { 'hermes-atlas': lane(laneOver) },
   ok: true,
   snapshotAgeS: 12,
+  writeLease: { expiresAt: null, held: false, holderAlive: null, holderLane: null, holderPid: null, inFlight: false, why: 'no_lease' },
   ...over
 })
 
@@ -137,5 +138,17 @@ describe('laneWritesEnabled', () => {
     expect(laneWritesEnabled(rows, 'hermes-x')).toBe(false)
     expect(laneWritesEnabled(rows, null)).toBe(false)
     expect(laneWritesEnabled(null, 'hermes-atlas')).toBe(false)
+  })
+})
+
+describe('laneHoldsWriteLease', () => {
+  it('is true only for a held, valid lease whose holder is this lane', () => {
+    const held = { expiresAt: '2026-10-02T09:00:00.000Z', held: true, holderAlive: true, holderLane: 'hermes-atlas', holderPid: 4242, inFlight: false, why: null }
+    expect(laneHoldsWriteLease(snap({ writeLease: held }), 'hermes-atlas')).toBe(true)
+    expect(laneHoldsWriteLease(snap({ writeLease: held }), 'hermes')).toBe(false)
+    expect(laneHoldsWriteLease(snap({ writeLease: { ...held, held: false, why: 'revoked' } }), 'hermes-atlas')).toBe(false)
+    expect(laneHoldsWriteLease(snap(), 'hermes-atlas')).toBe(false)
+    expect(laneHoldsWriteLease(null, 'hermes-atlas')).toBe(false)
+    expect(laneHoldsWriteLease(snap({ writeLease: held }), null)).toBe(false)
   })
 })
