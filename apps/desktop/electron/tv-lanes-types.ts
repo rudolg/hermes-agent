@@ -43,6 +43,8 @@ export interface TvWriteLease {
   held: boolean
   /** False when the holder pid is proven gone (the lease then needs taking again); null when unknowable. */
   holderAlive: boolean | null
+  /** The chart the lease was taken for (the chart the holder's tab showed): writes to any other chart refuse. */
+  holderChart: null | string
   holderLane: null | string
   holderPid: null | number
   /** The holder reports a write running right now (a takeover or release waits for it). */
@@ -87,7 +89,7 @@ export interface TvLaneBindResult {
 /** One of the lamp's own lane scripts, started detached (they show their own dialogs). The allow-list IS the contract. */
 export type TvLaneRunRequest =
   | { action: 'create' }
-  | { action: 'chart-accept' | 'chart-add' | 'chart-remove' | 'lease-release' | 'lease-take' | 'tab-assign-front' | 'tab-focus'; lane: string }
+  | { action: 'chart-accept' | 'chart-add' | 'chart-remove' | 'lease-release' | 'lease-release-holder' | 'lease-take' | 'tab-assign-front' | 'tab-focus'; lane: string }
 
 export interface TvLanesApi {
   get: (workspacePaths: string[]) => Promise<TvLanesSnapshot>

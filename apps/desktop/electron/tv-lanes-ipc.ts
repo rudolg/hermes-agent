@@ -54,7 +54,7 @@ function readJson(file: string): unknown {
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const str = (v: unknown): null | string => (typeof v === 'string' && v.length > 0 ? v : null)
 
-const EMPTY_LEASE: TvWriteLease = { expiresAt: null, held: false, holderAlive: null, holderLane: null, holderPid: null, inFlight: false, why: 'no_lease' }
+const EMPTY_LEASE: TvWriteLease = { expiresAt: null, held: false, holderAlive: null, holderChart: null, holderLane: null, holderPid: null, inFlight: false, why: 'no_lease' }
 
 /** Is this exact process instance alive? pid liveness by signal 0, identity by `ps lstart` (the claims' own notion):
  *  a recycled pid is NOT alive; an instance whose start cannot be compared counts as alive (never reported gone). */
@@ -118,6 +118,7 @@ export function readWriteLease(dir: string, now: () => number = Date.now, alive:
 
   const holderLane = raw.holder_lane
   const holderPid = typeof raw.holder_pid === 'number' && Number.isInteger(raw.holder_pid) && raw.holder_pid > 1 ? raw.holder_pid : null
+  const holderChart = str(raw.holder_chart)
   const expiresAt = str(raw.expires_at)
   let epoch: null | string = null
 
@@ -128,7 +129,7 @@ export function readWriteLease(dir: string, now: () => number = Date.now, alive:
     epoch = null
   }
 
-  const base = { expiresAt, held: false, holderAlive: holderPid === null ? null : alive(holderPid, raw.holder_pid_start), holderLane, holderPid, inFlight: inFlightFor(leaseDir, holderLane, alive) }
+  const base = { expiresAt, held: false, holderAlive: holderPid === null ? null : alive(holderPid, raw.holder_pid_start), holderChart, holderLane, holderPid, inFlight: inFlightFor(leaseDir, holderLane, alive) }
 
   if (epoch === null) {
     return { ...base, why: 'epoch_unavailable' }
@@ -497,8 +498,10 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
 
     // THE WRITE SWITCH (owner, 2026-10-02): take or release the one write lease for this lane through the lamp's own
     // script — it asks before a takeover and names the holder in its dialogs; the servers enforce the lease.
-    if (action === 'lease-take' || action === 'lease-release') {
-      return { args: [lane, action === 'lease-take' ? 'take' : 'release'], interpreter: '/usr/bin/python3', script: path.join(LAMP_DIR, 'tv-write-lease.py') }
+    if (action === 'lease-take' || action === 'lease-release' || action === 'lease-release-holder') {
+      const verb = action === 'lease-take' ? 'take' : action === 'lease-release' ? 'release' : 'release-holder'
+
+      return { args: [lane, verb], interpreter: '/usr/bin/python3', script: path.join(LAMP_DIR, 'tv-write-lease.py') }
     }
 
     // bring this lane's tab forward; with no open tab the script says so and ASKS before opening its most recent chart

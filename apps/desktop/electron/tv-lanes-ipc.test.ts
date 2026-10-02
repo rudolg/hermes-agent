@@ -231,6 +231,7 @@ describe('hermes:tv-lanes:run', () => {
     expect(await run({}, { action: 'lease-take', lane: 'hermes-atlas' })).toEqual({ error: null, ok: true })
     expect(await run({}, { action: 'lease-release', lane: 'hermes-atlas' })).toEqual({ error: null, ok: true })
     expect(await run({}, { action: 'tab-focus', lane: 'hermes-atlas' })).toEqual({ error: null, ok: true })
+    expect(await run({}, { action: 'lease-release-holder', lane: 'atlas' })).toEqual({ error: null, ok: true })
     expect(started.map(a => a.map(x => path.basename(x)))).toEqual([
       ['python3', 'tv-lane-layouts.py', 'hermes-atlas', 'add'],
       ['python3', 'tv-lane-layouts.py', 'hermes-atlas', 'remove'],
@@ -239,7 +240,8 @@ describe('hermes:tv-lanes:run', () => {
       ['bash', 'tv-bind-front.sh', 'hermes-atlas'],
       ['python3', 'tv-write-lease.py', 'hermes-atlas', 'take'],
       ['python3', 'tv-write-lease.py', 'hermes-atlas', 'release'],
-      ['bash', 'tv-focus-channel.sh', 'hermes-atlas']
+      ['bash', 'tv-focus-channel.sh', 'hermes-atlas'],
+      ['python3', 'tv-write-lease.py', 'atlas', 'release-holder']
     ])
 
     // negative controls: an unknown action, an unregistered lane, a lane with shell-shaped text
@@ -248,7 +250,7 @@ describe('hermes:tv-lanes:run', () => {
       expect(res.ok).toBe(false)
     }
 
-    expect(started.length).toBe(8)
+    expect(started.length).toBe(9)
     delete process.env.HERMES_TV_LAMP_DIR
     delete process.env.HERMES_TV_LANE_NEW_SCRIPT
     fs.rmSync(lamp, { force: true, recursive: true })
@@ -261,7 +263,7 @@ describe('readWriteLease — the switch as the dot reads it', () => {
   const write = (dir: string, lease: Record<string, unknown>, epoch = '3') => {
     fs.mkdirSync(path.join(dir, 'lease'), { recursive: true })
     fs.writeFileSync(path.join(dir, 'lease', 'revocation_epoch'), `${epoch}\n`)
-    fs.writeFileSync(path.join(dir, 'lease', 'write_lease.json'), JSON.stringify({ epoch: '3', expires_at: '2026-10-02T09:00:00.000Z', fencing_token: '11', holder_lane: 'hermes-atlas', holder_pid: 4242, schema: 'tv.write_lease/v1', ...lease }))
+    fs.writeFileSync(path.join(dir, 'lease', 'write_lease.json'), JSON.stringify({ epoch: '3', expires_at: '2026-10-02T09:00:00.000Z', fencing_token: '11', holder_chart: 'N06Rmf2K', holder_lane: 'hermes-atlas', holder_pid: 4242, schema: 'tv.write_lease/v1', ...lease }))
   }
 
   it('held only when present, well-formed, unexpired and on the current epoch; the holder and liveness named', async () => {
@@ -269,7 +271,7 @@ describe('readWriteLease — the switch as the dot reads it', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-lease-'))
     expect(readWriteLease(dir, () => T0)).toMatchObject({ held: false, holderLane: null, why: 'no_lease' })
     write(dir, {})
-    expect(readWriteLease(dir, () => T0, () => true)).toMatchObject({ expiresAt: '2026-10-02T09:00:00.000Z', held: true, holderAlive: true, holderLane: 'hermes-atlas', holderPid: 4242, inFlight: false, why: null })
+    expect(readWriteLease(dir, () => T0, () => true)).toMatchObject({ expiresAt: '2026-10-02T09:00:00.000Z', held: true, holderAlive: true, holderChart: 'N06Rmf2K', holderLane: 'hermes-atlas', holderPid: 4242, inFlight: false, why: null })
     expect(readWriteLease(dir, () => T0 + 2 * 3_600_000, () => true)).toMatchObject({ held: false, why: 'expired' })
     write(dir, {}, '4')
     expect(readWriteLease(dir, () => T0, () => false)).toMatchObject({ held: false, holderAlive: false, why: 'revoked' })

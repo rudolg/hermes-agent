@@ -39,7 +39,7 @@ const snap = (over: Partial<TvLanesSnapshot> = {}, laneOver: Partial<TvLaneView>
   lanes: { 'hermes-atlas': lane(laneOver) },
   ok: true,
   snapshotAgeS: 12,
-  writeLease: { expiresAt: null, held: false, holderAlive: null, holderLane: null, holderPid: null, inFlight: false, why: 'no_lease' },
+  writeLease: { expiresAt: null, held: false, holderAlive: null, holderChart: null, holderLane: null, holderPid: null, inFlight: false, why: 'no_lease' },
   ...over
 })
 
@@ -143,7 +143,7 @@ describe('laneWritesEnabled', () => {
 
 describe('laneHoldsWriteLease', () => {
   it('is true only for a held, valid lease whose holder is this lane', () => {
-    const held = { expiresAt: '2026-10-02T09:00:00.000Z', held: true, holderAlive: true, holderLane: 'hermes-atlas', holderPid: 4242, inFlight: false, why: null }
+    const held = { expiresAt: '2026-10-02T09:00:00.000Z', held: true, holderAlive: true, holderChart: 'N06Rmf2K', holderLane: 'hermes-atlas', holderPid: 4242, inFlight: false, why: null }
     expect(laneHoldsWriteLease(snap({ writeLease: held }), 'hermes-atlas')).toBe(true)
     expect(laneHoldsWriteLease(snap({ writeLease: held }), 'hermes')).toBe(false)
     expect(laneHoldsWriteLease(snap({ writeLease: { ...held, held: false, why: 'revoked' } }), 'hermes-atlas')).toBe(false)

@@ -56,7 +56,7 @@ const STATE_WORD: Record<TvLaneDotState, string> = {
   linked: 'registered',
   live: 'LIVE',
   stale: 'stale snapshot',
-  unlinked: 'no lane (click to link)'
+  unlinked: 'not attached (integrations: click to attach one)'
 }
 
 export interface TvLaneDotProps {
@@ -121,11 +121,15 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
   const leaseWord = !lease?.held
     ? 'read-only: nobody holds the write lease'
     : lease.holderLane === r.laneId
-      ? `holds the WRITE LEASE until ${hhmm(lease.expiresAt)} (two dots)`
-      : `read-only: the write lease is held by ${lease.holderLane}`
+      ? `holds the WRITE LEASE on ${lease.holderChart ?? 'its tab\'s chart'} until ${hhmm(lease.expiresAt)} (two dots)`
+      : `read-only: the write lease is held by ${lease.holderLane} on ${lease.holderChart ?? 'its chart'}`
 
   const rights = r.laneId && r.state !== 'unlinked' ? ` · ${leaseWord}${writes ? '' : ' · entry pinned read-only'}` : ''
-  const label = `TradingView lane: ${STATE_WORD[r.state]}${rights} — ${r.detail}`
+  // AN UNLINKED TREE SHOWS AN INTEGRATIONS MENU, NOT A LANE MENU (owner, 2026-10-02: "the submenu should give an option
+  // of presently TV mcp, in the future it may be different one(s)"): the list of integrations a tree can attach — today
+  // one — and nothing of the lane's own management until it is attached.
+  const attached = r.state !== 'unlinked'
+  const label = attached ? `TradingView lane: ${STATE_WORD[r.state]}${rights} — ${r.detail}` : 'Integrations: none attached to this tree'
 
   const apply = async (scope: 'session' | 'workspace', key: null | string, lane: null | string) => {
     if (!key) {
@@ -232,6 +236,7 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
       <DropdownMenuContent align="start" className="min-w-72">
         <DropdownMenuLabel className="whitespace-normal text-xs font-normal">{label}</DropdownMenuLabel>
         <DropdownMenuSeparator />
+        {!attached ? <DropdownMenuLabel>Integrations available — TradingView lane (attach this tree to one):</DropdownMenuLabel> : null}
         {scopeKey ? (
           <>
             <DropdownMenuLabel>This tree, every chat in it</DropdownMenuLabel>
@@ -292,25 +297,46 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
             >
               Bring {bound.id}'s tab to the front (opens it if closed — asks first)
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>
-              Write lease:{' '}
-              <span className="font-normal">
-                {lease?.held
-                  ? `held by ${lease.holderLane} (server pid ${lease.holderPid ?? '?'}) until ${hhmm(lease.expiresAt)}${lease.holderAlive === false ? ' — holder process GONE' : ''}${lease.inFlight ? ' — a write in flight' : ''}`
-                  : 'nobody — every lane is read-only'}
-              </span>
-            </DropdownMenuLabel>
-            {lease?.held && lease.holderLane === bound.id ? (
-              <DropdownMenuItem onSelect={() => void start({ action: 'lease-release', lane: bound.id }, `Releasing the write lease held by ${bound.id}`)}>
-                Release the write lease held by {bound.id}
-              </DropdownMenuItem>
-            ) : (
-              <DropdownMenuItem onSelect={() => void start({ action: 'lease-take', lane: bound.id }, `Taking the write lease for ${bound.id}`)}>
-                {lease?.held ? `Take the write lease over from ${lease.holderLane} for ${bound.id} (asks first; revokes it)` : `Take the write lease for ${bound.id}`}
-              </DropdownMenuItem>
-            )}
           </>
+        ) : null}
+        {attached ? (
+          <>
+        <DropdownMenuSeparator />
+        {/* WRITE-RIGHT MANAGEMENT ON EVERY ATTACHED DOT (owner, 2026-10-02: "release of those so other window can take"):
+            the one global lease is shown wherever an attached dot opens; a lease held by another lane can be released
+            from here (asked first) so another lane can take it; a bound tree can take, move, renew or release for its lane. */}
+        <DropdownMenuLabel>
+          Write lease:{' '}
+          <span className="font-normal">
+            {lease?.held
+              ? `held by ${lease.holderLane} on chart ${lease.holderChart ?? '?'} (server pid ${lease.holderPid ?? '?'}) until ${hhmm(lease.expiresAt)}${lease.holderAlive === false ? ' — holder process GONE' : ''}${lease.inFlight ? ' — a write in flight' : ''}`
+              : 'nobody — every lane is read-only'}
+          </span>
+        </DropdownMenuLabel>
+        {bound && lease?.held && lease.holderLane === bound.id ? (
+          <DropdownMenuItem onSelect={() => void start({ action: 'lease-release', lane: bound.id }, `Releasing the write lease held by ${bound.id} on ${lease.holderChart ?? 'its chart'}`)}>
+            Release the write lease held by {bound.id} on {lease.holderChart ?? 'its chart'}
+          </DropdownMenuItem>
+        ) : null}
+        {bound && lease?.held && lease.holderLane === bound.id && bound.intended ? (
+          <DropdownMenuItem onSelect={() => void start({ action: 'lease-take', lane: bound.id }, `${bound.intended === lease.holderChart ? 'Renewing' : 'Moving'} the write lease for ${bound.id} on ${bound.intended}`)}>
+            {bound.intended === lease.holderChart ? `Renew the write lease for ${bound.id} on ${bound.intended} (another 2 h)` : `Move the write lease for ${bound.id} to ${bound.intended} (the chart its tab shows now)`}
+          </DropdownMenuItem>
+        ) : null}
+        {bound && !(lease?.held && lease.holderLane === bound.id) ? (
+          <DropdownMenuItem onSelect={() => void start({ action: 'lease-take', lane: bound.id }, `Taking the write lease for ${bound.id} on ${bound.intended ?? 'the chart its tab shows'}`)}>
+            {lease?.held
+              ? `Take the write lease over from ${lease.holderLane} (on ${lease.holderChart ?? '?'}) for ${bound.id} on ${bound.intended ?? 'the chart its tab shows'} (asks first; revokes it)`
+              : `Take the write lease for ${bound.id} on ${bound.intended ?? 'the chart its tab shows'}`}
+          </DropdownMenuItem>
+        ) : null}
+        {lease?.held && lease.holderLane && lease.holderLane !== bound?.id ? (
+          <DropdownMenuItem onSelect={() => void start({ action: 'lease-release-holder', lane: bound?.id ?? lease.holderLane! }, `Releasing ${lease.holderLane}'s write lease (asks first)`)}>
+            Release {lease.holderLane}'s write lease on {lease.holderChart ?? '?'} (asks first) — so any lane can take it
+          </DropdownMenuItem>
+        ) : null}
+        {!bound && !lease?.held ? (
+          <DropdownMenuLabel className="font-normal text-(--ui-text-tertiary)">bind this tree or chat to a Hermes lane (above) to take the write lease for it</DropdownMenuLabel>
         ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuLabel>TV MCP servers in this app</DropdownMenuLabel>
@@ -335,6 +361,8 @@ export function TvLaneDot({ className, cwd, hideUnlinked = false, sessionId, wor
             </DropdownMenuItem>
           ))
         )}
+          </>
+        ) : null}
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={() =>
