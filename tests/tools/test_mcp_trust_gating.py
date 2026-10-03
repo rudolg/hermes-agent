@@ -318,6 +318,43 @@ class TestAnnotationCaptureAtDiscovery:
         assert not hints.get("delete_repo")
         assert not hints.get("no_annotations")
 
+    def test_real_sdk_tool_objects_are_read(self):
+        """The REAL SDK model, not a SimpleNamespace: on mcp 2.x ``ToolAnnotations`` exposes the hint only as
+        ``read_only_hint``, so a camelCase getattr read None and classed every tool write-capable (2026-10-03)."""
+        from mcp import types
+
+        def tool(annotations):
+            payload = {"name": "t", "inputSchema": {"type": "object"}}
+            if annotations is not None:
+                payload["annotations"] = annotations
+            return types.Tool.model_validate(payload)
+
+        assert _mcp_registration._annotation_read_only_hint(tool({"readOnlyHint": True})) is True
+        assert _mcp_registration._annotation_read_only_hint(tool({"readOnlyHint": False})) is False
+        assert _mcp_registration._annotation_read_only_hint(tool({"destructiveHint": False})) is False
+        assert _mcp_registration._annotation_read_only_hint(tool(None)) is False
+
+    def test_registration_records_hints_from_real_sdk_tools(self):
+        """Discovery records the hint from SDK ``Tool`` objects exactly as the live client receives them."""
+        from mcp import types
+        from tools.registry import ToolRegistry
+
+        server = mcp_tool.MCPServerTask("srv_sdk")
+        server.session = MagicMock()
+        server._tools = [
+            types.Tool.model_validate({"name": "read_chart", "inputSchema": {"type": "object"},
+                                       "annotations": {"readOnlyHint": True}}),
+            types.Tool.model_validate({"name": "set_chart", "inputSchema": {"type": "object"}}),
+        ]
+        config = {"trust": "untrusted", "tools": {"resources": False, "prompts": False}}
+        with patch("tools.registry.registry", ToolRegistry()), \
+             patch("tools.mcp_tool_registration._track_mcp_tool_server"):
+            _mcp_registration._register_server_tools("srv_sdk", server, config)
+
+        hints = mcp_tool._tool_read_only_hints["srv_sdk"]
+        assert hints.get("read_chart") is True
+        assert not hints.get("set_chart")
+
     def test_dict_annotations_supported(self):
         """Cached/JSON annotations arrive as plain dicts."""
         assert _mcp_registration._annotation_read_only_hint(

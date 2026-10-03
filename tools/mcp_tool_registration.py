@@ -47,9 +47,12 @@ def _normalize_server_trust(value: Any) -> str:
 
 
 def _annotation_read_only_hint(mcp_tool: Any) -> bool:
-    """True only when annotations (SDK object or cache dict) carry ``readOnlyHint is True``; unknown = write-capable."""
+    """True only when annotations (SDK object or cache dict) carry ``readOnlyHint is True``; unknown = write-capable.
+    The SDK object is read across the 1.x -> 2.x snake_case rename (``read_only_hint``): a bare camelCase getattr
+    returns None on 2.x, which classed EVERY tool on a ``trust: untrusted`` server as write-capable (2026-10-03)."""
     annotations = getattr(mcp_tool, "annotations", None)
-    hint = annotations.get("readOnlyHint") if isinstance(annotations, dict) else getattr(annotations, "readOnlyHint", None)
+    hint = (annotations.get("readOnlyHint") if isinstance(annotations, dict)
+            else mcp_field(annotations, "read_only_hint", "readOnlyHint"))
     return hint is True
 
 
