@@ -18,6 +18,37 @@ class Native(httpx.BaseTransport):
         return httpx.Response(200, content=self.body, request=request)
 
 
+@pytest.mark.parametrize("historical_text,allowed", [
+    ("The repository is /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS. Continue the code task.", True),
+    ("The worktrees directory is /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS-worktrees.", True),
+    ("Read /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS/patient-records/demo.txt", False),
+    ("Read /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS-private/note.txt", False),
+    ("Read /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS/../../patient.txt", False),
+    ("Read /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/patient.txt", False),
+    ("The repository is /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS. Hospital number 0000000.", False),
+])
+def test_project_history_reaches_provider_but_clinical_history_stays_local(monkeypatch, tmp_path, historical_text, allowed):
+    controls = []
+    monkeypatch.setattr(broker, "_control", lambda _root, payload: controls.append(payload) or {"ok": True, "lease": "test-lease"})
+    transport = broker.ClaudeBrokerTransport(tmp_path)
+    native = Native(b"PROVIDER_REACHED")
+    transport.native = native
+    body = {"model": "claude-opus-5-5", "messages": [
+        {"role": "user", "content": historical_text},
+        {"role": "assistant", "content": "Acknowledged."},
+        {"role": "user", "content": "and?"},
+    ]}
+    with httpx.Client(transport=transport) as client:
+        response = client.post("http://broker.local/v1/messages", json=body)
+        if allowed:
+            assert response.content == b"PROVIDER_REACHED"
+            assert json.loads(native.requests[0].content) == body
+        else:
+            assert response.json()["id"] == "msg_local_clinic_refusal"
+    assert len(native.requests) == int(allowed)
+    assert len(controls) == 2 * int(allowed)
+
+
 def test_native_tool_use_is_returned_unchanged_and_lease_closes(monkeypatch, tmp_path):
     controls = []
 

@@ -124,6 +124,18 @@ def _is_clinic(folded: str) -> bool:
 
 
 _PATH_END = set("/ \t\r\n\"'`.,;:)]?!}")
+_CODE_PROJECT_ROOT_NAMES = (
+    "/usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS",
+    "/usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS-worktrees",
+)
+
+
+def _is_code_project_root_name(folded: str, start: int) -> bool:
+    # These directory names are ordinary repository references. This exception
+    # does not cover descendants, file contents, traversal or access permissions.
+    token = re.split(r"[\s\"'`<>{}\[\],;:)?!]", folded[start:], maxsplit=1)[0]
+    return any(token in {root.casefold(), root.casefold() + "."}
+               for root in _CODE_PROJECT_ROOT_NAMES)
 
 
 def _escaped_quote_mention(folded: str, start: int, end: int) -> bool:
@@ -195,7 +207,7 @@ def _has_denied_path(folded: str) -> bool:
             stop = at + len(needle)
             nxt = folded[stop] if stop < len(folded) else ""
             if nxt == "" or nxt in _PATH_END:
-                if not _path_is_only_named(folded, at, stop):
+                if not _is_code_project_root_name(folded, at) and not _path_is_only_named(folded, at, stop):
                     return True
             begin = at + 1
     return False
