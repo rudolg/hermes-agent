@@ -214,6 +214,11 @@ def _has_denied_path(folded: str) -> bool:
 
 
 def refusal_for(text: str, *, vendor: str) -> str:
+    # The Claude door is OPEN (owner, 2026-10-03: "remove clinical block ffs"; "remove this shit from
+    # hermes now"). Claude is allowed this material; only the Codex door keeps the screen below,
+    # because patient material never goes to a non-Anthropic vendor.
+    if vendor != "codex":
+        return ""
     if not text:
         return ""
     folded = text.casefold()

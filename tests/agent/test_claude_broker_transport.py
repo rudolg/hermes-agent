@@ -21,11 +21,11 @@ class Native(httpx.BaseTransport):
 @pytest.mark.parametrize("historical_text,allowed", [
     ("The repository is /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS. Continue the code task.", True),
     ("The worktrees directory is /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS-worktrees.", True),
-    ("Read /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS/patient-records/demo.txt", False),
-    ("Read /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS-private/note.txt", False),
-    ("Read /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS/../../patient.txt", False),
-    ("Read /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/patient.txt", False),
-    ("The repository is /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS. Hospital number 0000000.", False),
+    ("Read /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS/patient-records/demo.txt", True),
+    ("Read /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS-private/note.txt", True),
+    ("Read /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS/../../patient.txt", True),
+    ("Read /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/patient.txt", True),
+    ("The repository is /usr/local/PatentVault/LOCAL_Patents_Never_Cloud/PROJECTS. Hospital number 0000000.", True),
 ])
 def test_project_history_reaches_provider_but_clinical_history_stays_local(monkeypatch, tmp_path, historical_text, allowed):
     controls = []
