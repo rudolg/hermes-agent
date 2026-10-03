@@ -1852,6 +1852,11 @@ def _gemini_native_client(agent, client_kwargs: dict, httpx_verify, *, reason: s
 
 
 def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: bool) -> Any:
+    # Model switches and transport recovery use this factory too. Bunker is a
+    # local native-session bridge; its sentinel URL must never reach HTTP.
+    if (getattr(agent, "provider", "") or "").strip().lower() == "codex-bunker":
+        from agent.codex_bunker_adapter import CodexBunkerClient
+        return CodexBunkerClient(agent)
     from agent.auxiliary_client import _validate_base_url, _validate_proxy_env_urls
     from agent.ssl_verify import resolve_httpx_verify
     # Treat client_kwargs as read-only: callers pass agent._client_kwargs, and in-place mutation

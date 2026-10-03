@@ -66,6 +66,9 @@ def _valid_credential_pair(api_key: Any, base_url: Any) -> bool:
 
 def _swap_fallback_clients(agent, fb_client, fb_provider: str, fb_model: str, fb_base_url: str, fb_api_mode: str) -> None:
     """Install the fallback client(s) in place, honoring request_timeout_seconds (None = SDK default)."""
+    if fb_provider == "codex-bunker":
+        agent.client, agent._client_kwargs, agent.api_key = fb_client, {}, ""
+        return
     timeout = get_provider_request_timeout(fb_provider, fb_model)
     if fb_provider == "bedrock" and fb_api_mode in ("anthropic_messages", "bedrock_converse"):
         # Non-Mantle Bedrock: boto3-chain auth, no OpenAI/Anthropic SDK client to carry over.

@@ -6,6 +6,8 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from agent.codex_bunker_adapter import CodexBunkerClient
 from agent.transports.chat_completions import ChatCompletionsTransport
 from run_agent import AIAgent
@@ -32,6 +34,60 @@ for line in sys.stdin:
         result = {"error_code": "invalid_request"}
     print(json.dumps({"id": row["id"], "ok": True, **result}), flush=True)
 '''
+
+
+@pytest.mark.parametrize("rebuild", ["switch", "recovery", "fallback"])
+def test_bunker_switch_and_recovery_keep_native_transport(monkeypatch, tmp_path, rebuild):
+    from agent import codex_bunker_adapter, process_bootstrap
+    from agent.agent_runtime_helpers import _rebuild_primary_client
+    from agent.turn_api_call import _should_stream
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("HERMES_RUNTIME_DIR", str(tmp_path / "runtime"))
+    script = tmp_path / "bridge.py"
+    script.write_text(BRIDGE)
+    monkeypatch.setattr(codex_bunker_adapter, "_bridge_path", lambda: script)
+
+    def forbid_http(**kwargs):
+        raise AssertionError("A local Bunker route must not construct an HTTP client")
+
+    monkeypatch.setattr(process_bootstrap, "OpenAI", forbid_http)
+    fallback = rebuild == "fallback"
+    agent = AIAgent(model="claude-opus-5-5" if fallback else "gpt-6-sol",
+                    provider="claude-broker" if fallback else "codex-bunker",
+                    base_url="claude-broker://local" if fallback else "codex-bunker://local",
+                    api_key="sk-ant-oat-hermes-broker-placeholder" if fallback else "", quiet_mode=True,
+                    skip_context_files=True, skip_memory=True, save_trajectories=False,
+                    max_iterations=3)
+    try:
+        if rebuild == "switch":
+            agent._disable_streaming = False  # Also covers switching from a streaming provider.
+            agent.switch_model("gpt-6-astra-900k", "codex-bunker",
+                               api_key="local-bunker-placeholder", base_url="codex-bunker://local",
+                               api_mode="chat_completions")
+        elif rebuild == "recovery":
+            _rebuild_primary_client(agent, agent._primary_runtime, reason="primary_recovery")
+        else:
+            from agent.chat_completion_helpers import try_activate_fallback
+            from agent.error_classifier import FailoverReason
+            agent._fallback_chain = [{"provider": "codex-bunker", "model": "gpt-6-astra-900k"}]
+            agent._fallback_index = 0
+            assert try_activate_fallback(agent, FailoverReason.rate_limit)
+            assert agent.provider == "codex-bunker"
+        assert isinstance(agent.client, CodexBunkerClient)
+        assert _should_stream(agent) is False
+        if rebuild == "switch":
+            assert agent._disable_streaming is False  # Provider choice does not mutate runtime fallback state.
+        tools = [{"type": "function", "function": {"name": "research_lookup",
+                  "description": "Look up a source", "parameters": {"type": "object"}}}]
+        first = agent.client.chat.completions.create(model=agent.model, tools=tools,
+                 messages=[{"role": "user", "content": "Find a source."}])
+        assert first.choices[0].message.tool_calls[0].id == "call-1"
+        final = agent.client.chat.completions.create(model=agent.model, tools=tools,
+                 messages=[{"role": "tool", "tool_call_id": "call-1", "content": "found source"}])
+        assert final.choices[0].message.content == "The source was found."
+    finally:
+        agent.client.close()
 
 
 def test_tool_call_round_trip_uses_one_native_bunker_thread(tmp_path):

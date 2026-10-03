@@ -49,7 +49,7 @@ def _should_stream(agent: Any) -> bool:
     checks); disabled on provider signal, ACP providers (``acp://`` scheme or an
     external-process provider profile), MoA without a display consumer, or Mock clients in
     tests (SimpleNamespace, not stream iterators)."""
-    if getattr(agent, "_disable_streaming", False):
+    if agent.provider == "codex-bunker" or getattr(agent, "_disable_streaming", False):
         return False
     _base = str(agent.base_url or "").lower()
     from hermes_cli.runtime_provider_backends import _is_external_process_provider

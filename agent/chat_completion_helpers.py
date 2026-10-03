@@ -2120,8 +2120,15 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None, reset_a
                 from agent.secret_scope import get_secret
                 fb_api_key_hint = get_secret("OLLAMA_API_KEY") or None
             # raw_codex=True: the main agent needs direct responses.stream() access for Codex providers.
-            fb_client, _resolved_fb_model = resolve_provider_client(
-                fb_provider, model=fb_model, raw_codex=True, explicit_base_url=fb_base_url_hint, explicit_api_key=fb_api_key_hint, api_mode=fb_api_mode)
+            if fb_provider == "codex-bunker":
+                from agent.codex_bunker_adapter import CodexBunkerClient
+                from hermes_cli.runtime_provider import resolve_runtime_provider
+                resolve_runtime_provider(requested=fb_provider, target_model=fb_model,
+                                         explicit_base_url=fb_base_url_hint, explicit_api_key=fb_api_key_hint)
+                fb_client = CodexBunkerClient(agent)
+            else:
+                fb_client, _resolved_fb_model = resolve_provider_client(
+                    fb_provider, model=fb_model, raw_codex=True, explicit_base_url=fb_base_url_hint, explicit_api_key=fb_api_key_hint, api_mode=fb_api_mode)
             if fb_client is None:
                 logger.warning("Fallback to %s failed: provider not configured", fb_provider)
                 unavailable.add(fb_key)
@@ -2142,7 +2149,7 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None, reset_a
                 except Exception as _norm_err:
                     logger.warning("Could not normalize fallback model %r for provider %r: %s", fb_model, fb_provider, _norm_err)
 
-                fb_base_url = str(fb_client.base_url)
+                fb_base_url = "codex-bunker://local" if fb_provider == "codex-bunker" else str(fb_client.base_url)
                 from hermes_cli.providers import is_actual_route
                 if is_actual_route(fb_provider, fb_base_url):
                     fb_api_mode = "chat_completions"
