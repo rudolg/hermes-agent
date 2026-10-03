@@ -12,7 +12,7 @@ import logging
 import os
 import subprocess
 
-from agent.clinic_wire import refusal_for
+from agent.clinic_wire import stays_with_claude
 
 logger = logging.getLogger(__name__)
 
@@ -154,8 +154,8 @@ def handoff_to_sol(agent, user_message):
         stripped = text.strip()
         if not stripped or stripped.lower().startswith("quad:"):
             return None
-        if refusal_for(stripped, vendor="claude"):
-            return None
+        if stays_with_claude(stripped):
+            return None          # clinic material never leaves the Claude mouth (owner rule)
         low = stripped.lower()
         explicit = low.startswith(EXPLICIT_PREFIXES)
         if not explicit and len(stripped) < ORDINARY_LIMIT:

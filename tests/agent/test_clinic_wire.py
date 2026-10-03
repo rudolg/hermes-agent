@@ -1,4 +1,6 @@
-from agent.clinic_wire import CLAUDE_REFUSAL, refusal_for
+import pytest
+
+from agent.clinic_wire import CLAUDE_REFUSAL, CODEX_REFUSAL, OTHER_REFUSAL, refusal_for
 
 QUOTED = (
     '"hospital number", "nhs number", "date of birth", '
@@ -113,3 +115,13 @@ def test_these_turns_are_not_clinic():
 
 def test_backtick_token_is_a_mention():
     assert refusal_for("`hospital number`", vendor="claude") == ""
+
+
+@pytest.mark.parametrize("vendor", ["codex", "grok", "gemini", "nous", "ollama", "openai", ""])
+def test_only_the_claude_door_is_open(vendor):
+    # Owner, 2026-10-03: the Claude door is open; every other backend keeps the screen.
+    text = "the hospital number is 12"
+    assert refusal_for(text, vendor="claude") == ""
+    expected = CODEX_REFUSAL if vendor == "codex" else OTHER_REFUSAL
+    assert refusal_for(text, vendor=vendor) == expected
+    assert refusal_for("read /Users/spinec/MDT/note.txt", vendor=vendor) == expected

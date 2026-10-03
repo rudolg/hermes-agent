@@ -49,6 +49,11 @@ CLAUDE_REFUSAL = (
     "Stopped before Claude. This looks like clinic or appraisal material. "
     "Open the Claude app for that."
 )
+# Any backend that is not Claude and not Codex is still a non-Anthropic vendor: same screen, own wording.
+OTHER_REFUSAL = (
+    "Stopped before a non-Anthropic vendor. This looks like clinic or appraisal material. "
+    "Use Claude for that."
+)
 CODEX_REFUSAL = (
     "Stopped before Codex. This looks like clinic or appraisal material. "
     "Use Claude for that."
@@ -213,19 +218,28 @@ def _has_denied_path(folded: str) -> bool:
     return False
 
 
+def stays_with_claude(text: str) -> bool:
+    """Routing hint, not a refusal: letter-shaped text or a denied folder keeps the turn on the Claude
+    mouth, so a seat swap never carries it to a non-Anthropic backend."""
+    if not text:
+        return False
+    folded = text.casefold()
+    return _is_clinic(folded) or _has_denied_path(folded)
+
+
 def refusal_for(text: str, *, vendor: str) -> str:
     # The Claude door is OPEN (owner, 2026-10-03: "remove clinical block ffs"; "remove this shit from
     # hermes now"). Claude is allowed this material; only the Codex door keeps the screen below,
     # because patient material never goes to a non-Anthropic vendor.
-    if vendor != "codex":
+    if vendor == "claude":
         return ""
     if not text:
         return ""
     folded = text.casefold()
     if _is_clinic(folded):
-        return CODEX_REFUSAL if vendor == "codex" else CLAUDE_REFUSAL
+        return CODEX_REFUSAL if vendor == "codex" else OTHER_REFUSAL
     if _has_denied_path(folded):
-        return CODEX_REFUSAL if vendor == "codex" else CLAUDE_REFUSAL
+        return CODEX_REFUSAL if vendor == "codex" else OTHER_REFUSAL
     return ""
 
 
