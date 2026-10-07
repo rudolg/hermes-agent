@@ -142,6 +142,8 @@ def _connect_inputs(server_name: str, config: dict) -> tuple[list, set]:
     header. The owner hashes this very list and an adopter recomputes it, so both digests are
     built from one code path. Also returns the configured header names (HTTP only), captured
     before the identity header is merged in, for the strict-redirect boundary."""
+    from tools.mcp_tool_session_identity import validate_session_identity_config
+    validate_session_identity_config(config)
     if "url" in config:
         url, headers = _http_endpoint(server_name, config)
         configured_header_names = {key.lower() for key in headers}
