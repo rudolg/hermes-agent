@@ -1,0 +1,477 @@
+#!/usr/bin/python3
+"""Put the Hermes seat commits back after an update resets this checkout.
+
+The updater only moves this Mac. GitHub is not asked to change. This script
+lives outside the checkout, at /Users/spinec/bin/hermes-carry. A copy is also
+stored at scripts/spinec/hermes-carry on branch local. After a successful
+restore, that copy replaces this file when the two differ.
+
+Branch local is restored from the fork remote greg. The script fetches that
+one branch and origin/main. It does not push. If local is missing, it is
+created from greg/local. If the seat file is gone and the tree is clean, the
+branch is reset to greg/local. If greg/local is strictly ahead, local
+fast-forwards. If the two have diverged, local is left as it is. origin/main
+is then merged in. A conflict aborts that merge and leaves the branch.
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(os.environ.get("HERMES_CARRY_REPO", "/Users/spinec/.hermes/hermes-agent"))
+BRANCH_FILE = Path(os.environ.get(
+    "HERMES_CARRY_BRANCH_FILE", "/Users/spinec/.hermes/hermes-carry-branch"))
+CONFIG = Path(os.environ.get("HERMES_CARRY_CONFIG", "/Users/spinec/.hermes/config.yaml"))
+WRAPPER = Path("/Users/spinec/.local/bin/hermes")
+CARRY_PATH = Path("/Users/spinec/bin/hermes-carry")
+REAL = "/Users/spinec/.hermes/hermes-agent/.hermes/bin/hermes"
+SEAT = Path("agent/seat_router.py")
+REPO_COPY = Path("scripts/spinec/hermes-carry")
+MARKER = "hermes-carry"
+FORK = "greg"
+
+
+def branch_name() -> str:
+    try:
+        text = BRANCH_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        text = ""
+    return text or "local"
+
+
+def run(args: list[str], timeout: int = 60) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_MERGE_AUTOEDIT"] = "no"
+    try:
+        return subprocess.run(
+            ["git", "-C", str(REPO), *args],
+            text=True, capture_output=True, check=False,
+            timeout=timeout, env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(args, 124, "", "")
+
+
+def explain(prefix: str, done: subprocess.CompletedProcess[str]) -> None:
+    line = ""
+    blob = (done.stderr or "") + "\n" + (done.stdout or "")
+    for raw in blob.splitlines():
+        if "://" in raw:
+            continue
+        line = raw.strip()
+        if line:
+            break
+    print(prefix + (f": {line}" if line else ""))
+
+
+def head_branch() -> str:
+    return (run(["branch", "--show-current"]).stdout or "").strip()
+
+
+def has_seat() -> bool:
+    return (REPO / SEAT).is_file()
+
+
+def ref_ok(ref: str) -> bool:
+    return run(["rev-parse", "--verify", "--quiet", ref]).returncode == 0
+
+
+def seat_at(ref: str) -> bool:
+    spec = f"{ref}:{SEAT.as_posix()}"
+    return run(["cat-file", "-e", spec]).returncode == 0
+
+
+def dirty() -> bool:
+    return bool((run(["status", "--porcelain"]).stdout or "").strip())
+
+
+def fetch_ref(remote: str, branch: str) -> bool:
+    spec = f"refs/heads/{branch}:refs/remotes/{remote}/{branch}"
+    return run(["fetch", remote, spec]).returncode == 0
+
+
+def ensure_config() -> None:
+    if os.environ.get("HERMES_CARRY_SKIP_CONFIG") or not CONFIG.is_file():
+        return
+    lines = CONFIG.read_text(encoding="utf-8").splitlines()
+    key = "  parked_branch_strategy: update_in_place"
+    if key in lines:
+        return
+    out = []
+    in_updates = False
+    inserted = False
+    for line in lines:
+        if in_updates and line and not line.startswith((" ", "\t", "#")):
+            if not inserted:
+                out.append(key)
+                inserted = True
+            in_updates = False
+        if line == "updates:":
+            in_updates = True
+        if in_updates and line.startswith("  parked_branch_strategy:"):
+            out.append(key)
+            inserted = True
+            continue
+        out.append(line)
+    if in_updates and not inserted:
+        out.append(key)
+        inserted = True
+    if not inserted:
+        return
+    CONFIG.write_text("\n".join(out) + "\n", encoding="utf-8")
+    print("carry: set updates.parked_branch_strategy to update_in_place")
+
+
+def wrapper_body() -> str:
+    return (
+        "#!/bin/sh\n"
+        f"real={REAL}\n"
+        'if [ "${1:-}" = update ]; then '
+        '"$real" "$@"; rc=$?; /Users/spinec/bin/hermes-carry --after-update; '
+        'crc=$?; if [ "$rc" -ne 0 ]; then exit "$rc"; fi; exit "$crc"; fi\n'
+        'exec "$real" "$@"\n'
+    )
+
+
+def ensure_wrapper() -> None:
+    if os.environ.get("HERMES_CARRY_SKIP_WRAPPER"):
+        return
+    body = wrapper_body()
+    try:
+        current = WRAPPER.read_text(encoding="utf-8")
+    except OSError:
+        current = ""
+    if MARKER in current and REAL in current:
+        return
+    WRAPPER.parent.mkdir(parents=True, exist_ok=True)
+    WRAPPER.write_text(body, encoding="utf-8")
+    WRAPPER.chmod(0o755)
+    print("carry: restored the hermes update wrapper")
+
+
+def restart_gateway() -> None:
+    if os.environ.get("HERMES_CARRY_NO_RESTART"):
+        print("carry: gateway restart skipped")
+        return
+    uid = os.getuid()
+    done = subprocess.run(
+        ["launchctl", "kickstart", "-k", f"gui/{uid}/ai.hermes.gateway"],
+        text=True, capture_output=True,
+    )
+    if done.returncode != 0:
+        err = (done.stderr or done.stdout or "").strip().splitlines()
+        print("carry: gateway restart failed" + (f": {err[0]}" if err else ""))
+        return
+    print("carry: gateway restarted onto the restored checkout")
+
+
+def fast_forward(name: str, fork_ref: str) -> None:
+    if not seat_at(fork_ref):
+        print(f"carry: {fork_ref} has no seat router. Left {name} as it is.")
+        return
+    head = (run(["rev-parse", name]).stdout or "").strip()
+    fork = (run(["rev-parse", fork_ref]).stdout or "").strip()
+    if not head or not fork or head == fork:
+        return
+    fork_ahead = run(["merge-base", "--is-ancestor", name, fork_ref]).returncode == 0
+    local_ahead = run(["merge-base", "--is-ancestor", fork_ref, name]).returncode == 0
+    if fork_ahead and not local_ahead:
+        if dirty():
+            print(f"carry: {fork_ref} is ahead and the checkout is dirty. Left {name} as it is.")
+            return
+        moved = run(["merge", "--ff-only", fork_ref])
+        if moved.returncode != 0:
+            explain(f"carry: could not fast-forward {name}", moved)
+            return
+        print(f"carry: fast-forwarded {name} to {fork_ref}")
+        return
+    if local_ahead and not fork_ahead:
+        return
+    print(f"carry: {name} and {fork_ref} have diverged. Left {name} as it is.")
+
+
+def merge_upstream(name: str, origin_fetched: bool) -> int:
+    if not origin_fetched:
+        print("carry: could not fetch origin.")
+    if not ref_ok("origin/main"):
+        print("carry: origin/main is unavailable. Left the seat branch without an upstream merge.")
+        return 0 if has_seat() else 2
+    if run(["merge-base", "--is-ancestor", "origin/main", "HEAD"]).returncode == 0:
+        return 0
+    merged = run(["merge", "--no-edit", "origin/main"])
+    if merged.returncode == 0:
+        print(f"carry: merged origin/main into {name}")
+        return 0
+    run(["merge", "--abort"])
+    print("carry: merge stopped. Branch left unchanged. Conflict:")
+    shown = 0
+    for line in ((merged.stdout or "") + "\n" + (merged.stderr or "")).splitlines():
+        if "://" in line:
+            continue
+        print(line)
+        shown += 1
+        if shown >= 8:
+            break
+    return 2
+
+
+def install_carried_script() -> None:
+    if os.environ.get("HERMES_CARRY_SKIP_INSTALL"):
+        return
+    src = REPO / REPO_COPY
+    if not src.is_file():
+        return
+    new = src.read_bytes()
+    try:
+        old = CARRY_PATH.read_bytes()
+    except OSError:
+        old = b""
+    if new == old:
+        return
+    CARRY_PATH.write_bytes(new)
+    CARRY_PATH.chmod(0o755)
+    print("carry: installed the seat restore script from the checkout")
+
+
+def checkout_name(name: str) -> int:
+    if head_branch() == name:
+        return 0
+    switched = run(["checkout", name])
+    if switched.returncode != 0:
+        explain("carry: could not check out " + name, switched)
+        return 2
+    print(f"carry: checked out {name}")
+    return 0
+
+
+def after_update() -> int:
+    ensure_wrapper()
+    ensure_config()
+    name = branch_name()
+    fork_ref = f"{FORK}/{name}"
+    seat_missing = not has_seat()
+    if seat_missing and dirty():
+        print("carry: checkout is dirty and the seat router is gone. Nothing was changed.")
+        return 2
+
+    fork_fetched = fetch_ref(FORK, name)
+    origin_fetched = fetch_ref("origin", "main")
+
+    if not ref_ok(name):
+        if not (fork_fetched and seat_at(fork_ref)):
+            print(f"carry: branch {name} is missing and {fork_ref} could not be read.")
+            return 2
+        if dirty():
+            print("carry: checkout is dirty and the seat branch is missing. Nothing was changed.")
+            return 2
+        switched = run(["checkout", "-B", name, fork_ref])
+        if switched.returncode != 0:
+            explain(f"carry: could not restore {name}", switched)
+            return 2
+        print(f"carry: restored {name} from {fork_ref}")
+    else:
+        if checkout_name(name) != 0:
+            return 2
+        if not has_seat():
+            if not (fork_fetched and seat_at(fork_ref)):
+                print(f"carry: {name} does not contain the seat router and {fork_ref} is unavailable.")
+                return 2
+            if dirty():
+                print("carry: checkout is dirty and the seat router is gone. Nothing was changed.")
+                return 2
+            reset = run(["reset", "--hard", fork_ref])
+            if reset.returncode != 0 or not has_seat():
+                explain(f"carry: could not reset {name}", reset)
+                return 2
+            print(f"carry: reset {name} to {fork_ref}")
+        elif fork_fetched:
+            fast_forward(name, fork_ref)
+        else:
+            print("carry: could not fetch greg. Keeping the seat already on this Mac.")
+
+    if not has_seat():
+        print(f"carry: {name} does not contain the seat router.")
+        return 2
+    code = merge_upstream(name, origin_fetched)
+    if code != 0:
+        return code
+    install_carried_script()
+    if seat_missing:
+        restart_gateway()
+        print("carry: seat router is back")
+        return 0
+    print(f"carry ok: {name} has the seat router")
+    return 0
+
+
+def self_test() -> int:
+    import shutil
+    import tempfile
+    root = Path(tempfile.mkdtemp(prefix="hermes-carry-"))
+    upstream = root / "upstream"
+    checkout = root / "checkout"
+    fork = root / "fork.git"
+    side = root / "side"
+    upstream.mkdir()
+    git = ["git", "-c", "user.name=carry", "-c", "user.email=carry@example.invalid"]
+
+    def g(cwd: Path, *args: str) -> None:
+        subprocess.run(
+            [*git, "-C", str(cwd), *args],
+            check=True, text=True, capture_output=True,
+        )
+
+    def current() -> str:
+        return subprocess.run(
+            ["git", "-C", str(checkout), "branch", "--show-current"],
+            text=True, capture_output=True, check=True,
+        ).stdout.strip()
+
+    def carry() -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env["HERMES_CARRY_REPO"] = str(checkout)
+        env["HERMES_CARRY_SKIP_CONFIG"] = "1"
+        env["HERMES_CARRY_SKIP_WRAPPER"] = "1"
+        env["HERMES_CARRY_NO_RESTART"] = "1"
+        env["HERMES_CARRY_SKIP_INSTALL"] = "1"
+        env["HERMES_CARRY_BRANCH_FILE"] = str(root / "missing-branch-file")
+        return subprocess.run(
+            [sys.executable, __file__, "--after-update"],
+            text=True, capture_output=True, env=env,
+        )
+
+    def fail(label: str, done: subprocess.CompletedProcess[str] | None = None) -> int:
+        print(f"self-test failed: {label}")
+        print(f"self-test dir: {root}")
+        if done is not None:
+            print(done.stdout.strip())
+            if done.stderr.strip():
+                print(done.stderr.strip())
+        return 1
+
+    try:
+        g(upstream, "init", "-q", "-b", "main")
+        (upstream / "shared.txt").write_text("shared\n", encoding="utf-8")
+        g(upstream, "add", "shared.txt")
+        g(upstream, "commit", "-q", "-m", "shared")
+        subprocess.run(
+            ["git", "-C", str(root), "clone", "-q", str(upstream), str(checkout)],
+            check=True,
+        )
+        g(checkout, "checkout", "-q", "-b", "local")
+        (checkout / "agent").mkdir()
+        (checkout / "agent" / "seat_router.py").write_text("seat\n", encoding="utf-8")
+        g(checkout, "add", "agent/seat_router.py")
+        g(checkout, "commit", "-q", "-m", "seat")
+        seat_sha = subprocess.run(
+            ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+            text=True, capture_output=True, check=True,
+        ).stdout.strip()
+        g(checkout, "checkout", "-q", "main")
+        if (checkout / "agent" / "seat_router.py").exists():
+            return fail("main still has the seat router")
+
+        g(checkout, "branch", "-D", "local")
+        missing = carry()
+        if missing.returncode == 0 or (checkout / "agent" / "seat_router.py").exists():
+            return fail("missing branch was restored without greg", missing)
+        g(checkout, "branch", "local", seat_sha)
+
+        (upstream / "new.txt").write_text("new\n", encoding="utf-8")
+        g(upstream, "add", "new.txt")
+        g(upstream, "commit", "-q", "-m", "upstream")
+        restored = carry()
+        if restored.returncode != 0:
+            return fail("local branch did not restore", restored)
+        if not (checkout / "agent" / "seat_router.py").is_file():
+            return fail("seat router was not restored", restored)
+        if not (checkout / "new.txt").is_file():
+            return fail("origin/main was not merged", restored)
+        if current() != "local":
+            return fail(f"branch is {current()}", restored)
+
+        fork.mkdir()
+        g(fork, "init", "-q", "--bare", "-b", "main")
+        g(checkout, "remote", "add", FORK, str(fork))
+        g(checkout, "push", "-q", FORK, "local")
+        g(checkout, "checkout", "-q", "main")
+        g(checkout, "branch", "-D", "local")
+        (checkout / "agent").mkdir(exist_ok=True)
+        seat_file = checkout / "agent" / "seat_router.py"
+        if seat_file.exists():
+            seat_file.unlink()
+        from_fork = carry()
+        if from_fork.returncode != 0 or not seat_file.is_file() or current() != "local":
+            return fail("greg/local did not restore a missing branch", from_fork)
+
+        (checkout / "extra.txt").write_text("extra\n", encoding="utf-8")
+        g(checkout, "add", "extra.txt")
+        g(checkout, "commit", "-q", "-m", "extra")
+        g(checkout, "push", "-q", FORK, "local")
+        g(checkout, "reset", "--hard", "HEAD~1")
+        forwarded = carry()
+        if forwarded.returncode != 0 or not (checkout / "extra.txt").is_file():
+            return fail("strictly ahead greg/local did not fast-forward", forwarded)
+
+        (checkout / "ours.txt").write_text("ours\n", encoding="utf-8")
+        g(checkout, "add", "ours.txt")
+        g(checkout, "commit", "-q", "-m", "ours")
+        subprocess.run(
+            ["git", "-C", str(root), "clone", "-q", "-b", "local", str(fork), str(side)],
+            check=True,
+        )
+        (side / "theirs.txt").write_text("theirs\n", encoding="utf-8")
+        g(side, "add", "theirs.txt")
+        g(side, "commit", "-q", "-m", "theirs")
+        g(side, "push", "-q", "origin", "local")
+        diverged = carry()
+        if diverged.returncode != 0:
+            return fail("diverged branches failed", diverged)
+        if not (checkout / "ours.txt").is_file() or (checkout / "theirs.txt").exists():
+            return fail("diverged local was moved", diverged)
+        if "diverged" not in diverged.stdout:
+            return fail("divergence was not reported", diverged)
+
+        g(checkout, "rm", "-q", "agent/seat_router.py")
+        g(checkout, "commit", "-q", "-m", "drop seat")
+        wiped = carry()
+        if wiped.returncode != 0 or not seat_file.is_file():
+            return fail("missing seat file was not reset from greg", wiped)
+        if (checkout / "ours.txt").exists():
+            return fail("reset did not move onto greg/local", wiped)
+
+        g(checkout, "checkout", "-q", "main")
+        (checkout / "shared.txt").write_text("dirty\n", encoding="utf-8")
+        dirty = carry()
+        if dirty.returncode == 0:
+            return fail("dirty checkout was changed", dirty)
+        if current() != "main":
+            return fail("dirty checkout left main", dirty)
+        if (checkout / "shared.txt").read_text(encoding="utf-8") != "dirty\n":
+            return fail("dirty file was overwritten", dirty)
+    except subprocess.CalledProcessError as exc:
+        print(f"self-test git failed: {exc}")
+        print(f"self-test dir: {root}")
+        if exc.stderr:
+            print(exc.stderr.strip())
+        return 1
+
+    shutil.rmtree(root)
+    print("self-test ok")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if argv == ["--self-test"]:
+        return self_test()
+    if argv == ["--after-update"]:
+        return after_update()
+    sys.stderr.write("usage: hermes-carry --after-update|--self-test\n")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
