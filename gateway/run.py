@@ -1557,9 +1557,6 @@ def _planned_restart_notification_pending() -> bool:
     return _planned_restart_notification_path().exists()
 
 
-# Gateway marker so a lazily imported cli.py load_cli_config() doesn't clobber TERMINAL_CWD.
-os.environ["_HERMES_GATEWAY"] = "1"
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hermes_constants import get_hermes_home, get_hermes_home_override, get_process_hermes_home
@@ -5822,6 +5819,10 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     deadlocks); ``force`` starts without consulting the host owner at all."""
     # Set here (not at import) so incidental gateway.run imports from CLI code don't poison it.
     os.environ["HERMES_EXEC_ASK"] = "1"
+    # Desktop imports shared gateway helpers during agent construction. Only real
+    # messaging startup owns this marker: import-time assignment hid gateway:false
+    # MCP servers from every later Desktop conversation.
+    os.environ["_HERMES_GATEWAY"] = "1"
 
     # Messaging-only defaults belong to startup, not incidental imports by the TUI.
     configured_cwd = os.environ.get("TERMINAL_CWD", "")

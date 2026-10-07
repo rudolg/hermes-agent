@@ -140,7 +140,7 @@ def _parse_boolish(value: Any, default: bool = True) -> bool:
 def mcp_server_scoped_out_of_gateway(cfg: dict) -> bool:
     """True when ``mcp_servers.<name>.gateway`` is false AND this process is the messaging gateway.
 
-    The gateway marks itself with ``_HERMES_GATEWAY=1`` at import (gateway/run.py); the desktop backend,
+    Messaging startup marks itself with ``_HERMES_GATEWAY=1`` (gateway/run.py); the desktop backend,
     the CLI and ``hermes mcp`` never carry it. Owner's rule (2026-10-01): a TradingView chart lane has ONE
     controller claim, and the desktop app's chats are its driver — so the gateway must not spawn a competing
     server for an entry marked ``gateway: false``. Absent, ``null`` or unparseable ``gateway`` = in scope.
