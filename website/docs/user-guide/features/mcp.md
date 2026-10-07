@@ -493,6 +493,7 @@ Hermes reads MCP config from `~/.hermes/config.yaml` under `mcp_servers`.
 | `client_cert` | string \| list | Client certificate for mTLS — a combined PEM path, or `[cert, key]` / `[cert, key, password]` |
 | `client_key` | string | Client private-key PEM path (when separate from `client_cert`) |
 | `identity_header` | mapping | Optional per-user identity header for HTTP/SSE servers — `{name, value_from: static\|profile, value}` |
+| `session_identity` | string | `atlas/hermes-session/v1` opts one local stdio Atlas server into verified Desktop conversation metadata on each tool call. Delegated, unbound or mismatched callers are refused; HTTP/SSE destinations and other values are refused. Atlas still requires its own exact conversation grant. |
 | `timeout` | number | Tool call timeout |
 | `connect_timeout` | number | Initial connection timeout (also bounds the MCP `initialize` handshake) |
 | `lazy` | bool | If `true`, register the server's tools from the schema cache at startup and only start/connect it on the first tool call (default `false`). Needs one prior live connect to fill the cache. |
