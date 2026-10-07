@@ -39,7 +39,16 @@ const snap = (over: Partial<TvLanesSnapshot> = {}, laneOver: Partial<TvLaneView>
   lanes: { 'hermes-atlas': lane(laneOver) },
   ok: true,
   snapshotAgeS: 12,
-  writeLease: { expiresAt: null, held: false, holderAlive: null, holderChart: null, holderLane: null, holderPid: null, inFlight: false, why: 'no_lease' },
+  writeLease: {
+    expiresAt: null,
+    held: false,
+    holderAlive: null,
+    holderChart: null,
+    holderLane: null,
+    holderPid: null,
+    inFlight: false,
+    why: 'no_lease'
+  },
   ...over
 })
 
@@ -93,13 +102,24 @@ describe('resolveTvLane', () => {
 
   it('a session binding wins over the tree binding; a CLI declaration is shown as declared only', () => {
     const s = snap({
-      bindings: { sessions: { sid1: { lane: 'hermes', since: 't' } }, workspaces: { '/Users/g/tradingview-mcp-hermes': { lane: 'hermes-atlas', since: 't' } } },
+      bindings: {
+        sessions: { sid1: { lane: 'hermes', since: 't' } },
+        workspaces: { '/Users/g/tradingview-mcp-hermes': { lane: 'hermes-atlas', since: 't' } }
+      },
       declared: { '/Users/g/tradingview-mcp-dg': 'dg' },
-      lanes: { dg: lane({ holderApp: 'claude', id: 'dg', label: 'DG' }), hermes: lane({ id: 'hermes', label: 'HERMES' }), 'hermes-atlas': lane() }
+      lanes: {
+        dg: lane({ holderApp: 'claude', id: 'dg', label: 'DG' }),
+        hermes: lane({ id: 'hermes', label: 'HERMES' }),
+        'hermes-atlas': lane()
+      }
     })
 
     expect(resolveTvLane(s, chat)).toMatchObject({ laneId: 'hermes', source: 'session', state: 'live' })
-    expect(resolveTvLane(s, { cwd: '/Users/g/tradingview-mcp-dg', sessionId: 'other' })).toMatchObject({ laneId: 'dg', source: 'declared', state: 'declared' })
+    expect(resolveTvLane(s, { cwd: '/Users/g/tradingview-mcp-dg', sessionId: 'other' })).toMatchObject({
+      laneId: 'dg',
+      source: 'declared',
+      state: 'declared'
+    })
   })
 })
 
@@ -128,9 +148,33 @@ describe('workspacePathsOf', () => {
 describe('laneWritesEnabled', () => {
   it('is true only for an enabled entry that drives the lane with chart writes on', () => {
     const rows = [
-      { enabled: true, gatewayOut: true, idleS: null, lane: 'hermes', lazy: false, name: 'tradingview_hermes', write: false },
-      { enabled: true, gatewayOut: true, idleS: null, lane: 'hermes-atlas', lazy: false, name: 'tradingview_hermes_atlas', write: true },
-      { enabled: false, gatewayOut: true, idleS: null, lane: 'hermes-x', lazy: false, name: 'tradingview_hermes_x', write: true }
+      {
+        enabled: true,
+        gatewayOut: true,
+        idleS: null,
+        lane: 'hermes',
+        lazy: false,
+        name: 'tradingview_hermes',
+        write: false
+      },
+      {
+        enabled: true,
+        gatewayOut: true,
+        idleS: null,
+        lane: 'hermes-atlas',
+        lazy: false,
+        name: 'tradingview_hermes_atlas',
+        write: true
+      },
+      {
+        enabled: false,
+        gatewayOut: true,
+        idleS: null,
+        lane: 'hermes-x',
+        lazy: false,
+        name: 'tradingview_hermes_x',
+        write: true
+      }
     ]
 
     expect(laneWritesEnabled(rows, 'hermes-atlas')).toBe(true)
@@ -143,10 +187,21 @@ describe('laneWritesEnabled', () => {
 
 describe('laneHoldsWriteLease', () => {
   it('is true only for a held, valid lease whose holder is this lane', () => {
-    const held = { expiresAt: '2026-10-02T09:00:00.000Z', held: true, holderAlive: true, holderChart: 'N06Rmf2K', holderLane: 'hermes-atlas', holderPid: 4242, inFlight: false, why: null }
+    const held = {
+      expiresAt: '2026-10-02T09:00:00.000Z',
+      held: true,
+      holderAlive: true,
+      holderChart: 'N06Rmf2K',
+      holderLane: 'hermes-atlas',
+      holderPid: 4242,
+      inFlight: false,
+      why: null
+    }
     expect(laneHoldsWriteLease(snap({ writeLease: held }), 'hermes-atlas')).toBe(true)
     expect(laneHoldsWriteLease(snap({ writeLease: held }), 'hermes')).toBe(false)
-    expect(laneHoldsWriteLease(snap({ writeLease: { ...held, held: false, why: 'revoked' } }), 'hermes-atlas')).toBe(false)
+    expect(laneHoldsWriteLease(snap({ writeLease: { ...held, held: false, why: 'revoked' } }), 'hermes-atlas')).toBe(
+      false
+    )
     expect(laneHoldsWriteLease(snap(), 'hermes-atlas')).toBe(false)
     expect(laneHoldsWriteLease(null, 'hermes-atlas')).toBe(false)
     expect(laneHoldsWriteLease(snap({ writeLease: held }), null)).toBe(false)

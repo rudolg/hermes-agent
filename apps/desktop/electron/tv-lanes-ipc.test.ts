@@ -21,7 +21,14 @@ vi.mock('electron', () => ({
   }
 }))
 
-import { applyStatus, declaredLane, holderAppOf, lanesFromRegistry, readBindings, registerTvLanesIpc } from './tv-lanes-ipc'
+import {
+  applyStatus,
+  declaredLane,
+  holderAppOf,
+  lanesFromRegistry,
+  readBindings,
+  registerTvLanesIpc
+} from './tv-lanes-ipc'
 
 const registry = {
   browser: { port: 9223 },
@@ -82,8 +89,20 @@ describe('lanesFromRegistry + applyStatus', () => {
     expect(Object.keys(lanes).sort()).toEqual(['atlas', 'hermes-atlas'])
     expect(lanes.atlas.policy).toBe('battlefield')
     expect(applyStatus(lanes, status)).toBe('2026-10-01T09:53:09.732Z')
-    expect(lanes['hermes-atlas']).toMatchObject({ claimState: 'held', healthVerdict: 'BINDING_TAB_CLOSED', holderPid: 92998, intended: null, up: false })
-    expect(lanes.atlas).toMatchObject({ claimState: 'held', healthVerdict: 'TAB_OK', intended: 'LCEdRvf8', slugs: ['LCEdRvf8'], up: true })
+    expect(lanes['hermes-atlas']).toMatchObject({
+      claimState: 'held',
+      healthVerdict: 'BINDING_TAB_CLOSED',
+      holderPid: 92998,
+      intended: null,
+      up: false
+    })
+    expect(lanes.atlas).toMatchObject({
+      claimState: 'held',
+      healthVerdict: 'TAB_OK',
+      intended: 'LCEdRvf8',
+      slugs: ['LCEdRvf8'],
+      up: true
+    })
   })
 
   it('negative control: no snapshot leaves every lane unknown, never up', () => {
@@ -105,12 +124,19 @@ describe('holderAppOf', () => {
       600: { command: '/usr/local/bin/claude', ppid: 1 },
       700: { command: '/opt/homebrew/bin/node src/server.js', ppid: 1 },
       // the background gateway: launchd -> osascript wrapper -> python -> python -> node
-      800: { command: '/usr/bin/osascript -l JavaScript -e exec /Users/g/.hermes/hermes-agent/.hermes/bin/hermes --run-module hermes_cli.stderr', ppid: 1 },
+      800: {
+        command:
+          '/usr/bin/osascript -l JavaScript -e exec /Users/g/.hermes/hermes-agent/.hermes/bin/hermes --run-module hermes_cli.stderr',
+        ppid: 1
+      },
       810: { command: '/Users/g/.hermes/tools/python/bin/python3 -I -c import os', ppid: 800 },
       820: { command: '/Users/g/.hermes/tools/python/bin/python3 -I -c import os', ppid: 810 },
       830: { command: '/opt/homebrew/bin/node src/server.js', ppid: 820 },
       // a desktop backend whose own command names the checkout must still resolve to the app above it
-      900: { command: '/Users/g/.hermes/tools/python/bin/python3 /Users/g/.hermes/hermes-agent/hermes_cli/main.py', ppid: 100 },
+      900: {
+        command: '/Users/g/.hermes/tools/python/bin/python3 /Users/g/.hermes/hermes-agent/hermes_cli/main.py',
+        ppid: 100
+      },
       910: { command: '/opt/homebrew/bin/node src/server.js', ppid: 900 }
     }
 
@@ -130,9 +156,15 @@ describe('declaredLane + readBindings', () => {
     const ws = path.join(home, 'tree')
     fs.mkdirSync(ws)
     expect(declaredLane(ws)).toBeNull()
-    fs.writeFileSync(path.join(ws, '.mcp.json'), JSON.stringify({ mcpServers: { tradingview: { env: { TV_CDP_CHANNEL: 'dg' } } } }))
+    fs.writeFileSync(
+      path.join(ws, '.mcp.json'),
+      JSON.stringify({ mcpServers: { tradingview: { env: { TV_CDP_CHANNEL: 'dg' } } } })
+    )
     expect(declaredLane(ws)).toBe('dg')
-    fs.writeFileSync(path.join(ws, '.mcp.json'), JSON.stringify({ mcpServers: { tradingview: { env: { TV_CDP_CHANNEL: '../x' } } } }))
+    fs.writeFileSync(
+      path.join(ws, '.mcp.json'),
+      JSON.stringify({ mcpServers: { tradingview: { env: { TV_CDP_CHANNEL: '../x' } } } })
+    )
     expect(declaredLane(ws)).toBeNull()
   })
 
@@ -153,7 +185,10 @@ describe('registerTvLanesIpc', () => {
     fs.writeFileSync(path.join(dir, 'channel_status.json'), JSON.stringify(status))
     const ws = path.join(home, 'tree')
     fs.mkdirSync(ws)
-    fs.writeFileSync(path.join(ws, '.mcp.json'), JSON.stringify({ mcpServers: { tradingview: { env: { TV_CDP_CHANNEL: 'atlas' } } } }))
+    fs.writeFileSync(
+      path.join(ws, '.mcp.json'),
+      JSON.stringify({ mcpServers: { tradingview: { env: { TV_CDP_CHANNEL: 'atlas' } } } })
+    )
     const now = () => Date.parse('2026-10-01T09:54:09.732Z')
 
     // the status fixture: `atlas` held by pid 11658 (a Claude window), `hermes-atlas` by pid 92998 (this app)
@@ -168,7 +203,10 @@ describe('registerTvLanesIpc', () => {
     const get = electron.handlers.get('hermes:tv-lanes:get')!
     const bind = electron.handlers.get('hermes:tv-lanes:bind')!
 
-    const first = (await get({}, [ws, '/etc', 42])) as Awaited<ReturnType<typeof get>> & { declared: Record<string, string>; snapshotAgeS: number }
+    const first = (await get({}, [ws, '/etc', 42])) as Awaited<ReturnType<typeof get>> & {
+      declared: Record<string, string>
+      snapshotAgeS: number
+    }
     expect(first).toMatchObject({ declared: { [ws]: 'atlas' }, ok: true, snapshotAgeS: 60 })
 
     expect(await bind({}, { key: ws, lane: 'nope', scope: 'workspace' })).toMatchObject({ ok: false })
@@ -204,7 +242,14 @@ describe('hermes:tv-lanes:run', () => {
     fs.writeFileSync(path.join(dir, 'channels.json'), JSON.stringify(registry))
     const lamp = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-lamp-'))
 
-    for (const f of ['tv-accept-chart.py', 'tv-lane-layouts.py', 'tv-lane-new-hermes.py', 'tv-bind-front.sh', 'tv-write-lease.py', 'tv-focus-channel.sh']) {
+    for (const f of [
+      'tv-accept-chart.py',
+      'tv-lane-layouts.py',
+      'tv-lane-new-hermes.py',
+      'tv-bind-front.sh',
+      'tv-write-lease.py',
+      'tv-focus-channel.sh'
+    ]) {
       fs.writeFileSync(path.join(lamp, f), '#!/usr/bin/env python3\n')
     }
 
@@ -245,7 +290,13 @@ describe('hermes:tv-lanes:run', () => {
     ])
 
     // negative controls: an unknown action, an unregistered lane, a lane with shell-shaped text
-    for (const bad of [{ action: 'rm-rf' }, { action: 'chart-add', lane: 'nope' }, { action: 'chart-add', lane: 'atlas; rm' }, 'chart-add', null]) {
+    for (const bad of [
+      { action: 'rm-rf' },
+      { action: 'chart-add', lane: 'nope' },
+      { action: 'chart-add', lane: 'atlas; rm' },
+      'chart-add',
+      null
+    ]) {
       const res = (await run({}, bad)) as { ok: boolean }
       expect(res.ok).toBe(false)
     }
@@ -263,7 +314,19 @@ describe('readWriteLease — the switch as the dot reads it', () => {
   const write = (dir: string, lease: Record<string, unknown>, epoch = '3') => {
     fs.mkdirSync(path.join(dir, 'lease'), { recursive: true })
     fs.writeFileSync(path.join(dir, 'lease', 'revocation_epoch'), `${epoch}\n`)
-    fs.writeFileSync(path.join(dir, 'lease', 'write_lease.json'), JSON.stringify({ epoch: '3', expires_at: '2026-10-02T09:00:00.000Z', fencing_token: '11', holder_chart: 'N06Rmf2K', holder_lane: 'hermes-atlas', holder_pid: 4242, schema: 'tv.write_lease/v1', ...lease }))
+    fs.writeFileSync(
+      path.join(dir, 'lease', 'write_lease.json'),
+      JSON.stringify({
+        epoch: '3',
+        expires_at: '2026-10-02T09:00:00.000Z',
+        fencing_token: '11',
+        holder_chart: 'N06Rmf2K',
+        holder_lane: 'hermes-atlas',
+        holder_pid: 4242,
+        schema: 'tv.write_lease/v1',
+        ...lease
+      })
+    )
   }
 
   it('held only when present, well-formed, unexpired and on the current epoch; the holder and liveness named', async () => {
@@ -271,16 +334,64 @@ describe('readWriteLease — the switch as the dot reads it', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tv-lease-'))
     expect(readWriteLease(dir, () => T0)).toMatchObject({ held: false, holderLane: null, why: 'no_lease' })
     write(dir, {})
-    expect(readWriteLease(dir, () => T0, () => true)).toMatchObject({ expiresAt: '2026-10-02T09:00:00.000Z', held: true, holderAlive: true, holderChart: 'N06Rmf2K', holderLane: 'hermes-atlas', holderPid: 4242, inFlight: false, why: null })
-    expect(readWriteLease(dir, () => T0 + 2 * 3_600_000, () => true)).toMatchObject({ held: false, why: 'expired' })
+    expect(
+      readWriteLease(
+        dir,
+        () => T0,
+        () => true
+      )
+    ).toMatchObject({
+      expiresAt: '2026-10-02T09:00:00.000Z',
+      held: true,
+      holderAlive: true,
+      holderChart: 'N06Rmf2K',
+      holderLane: 'hermes-atlas',
+      holderPid: 4242,
+      inFlight: false,
+      why: null
+    })
+    expect(
+      readWriteLease(
+        dir,
+        () => T0 + 2 * 3_600_000,
+        () => true
+      )
+    ).toMatchObject({ held: false, why: 'expired' })
     write(dir, {}, '4')
-    expect(readWriteLease(dir, () => T0, () => false)).toMatchObject({ held: false, holderAlive: false, why: 'revoked' })
-    fs.writeFileSync(path.join(dir, 'lease', 'in_flight.hermes-atlas.json'), JSON.stringify({ count: 1, pid: 4242, pid_start: 's', updated_at: new Date(T0 - 1000).toISOString() }))
+    expect(
+      readWriteLease(
+        dir,
+        () => T0,
+        () => false
+      )
+    ).toMatchObject({ held: false, holderAlive: false, why: 'revoked' })
+    fs.writeFileSync(
+      path.join(dir, 'lease', 'in_flight.hermes-atlas.json'),
+      JSON.stringify({ count: 1, pid: 4242, pid_start: 's', updated_at: new Date(T0 - 1000).toISOString() })
+    )
     write(dir, {})
-    expect(readWriteLease(dir, () => T0, () => true)).toMatchObject({ held: true, inFlight: true })
-    expect(readWriteLease(dir, () => T0, () => false)).toMatchObject({ held: true, holderAlive: false, inFlight: false })
+    expect(
+      readWriteLease(
+        dir,
+        () => T0,
+        () => true
+      )
+    ).toMatchObject({ held: true, inFlight: true })
+    expect(
+      readWriteLease(
+        dir,
+        () => T0,
+        () => false
+      )
+    ).toMatchObject({ held: true, holderAlive: false, inFlight: false })
     fs.writeFileSync(path.join(dir, 'lease', 'in_flight.hermes-atlas.json'), '{broken')
-    expect(readWriteLease(dir, () => T0, () => true)).toMatchObject({ held: true, inFlight: true })
+    expect(
+      readWriteLease(
+        dir,
+        () => T0,
+        () => true
+      )
+    ).toMatchObject({ held: true, inFlight: true })
     fs.rmSync(path.join(dir, 'lease', 'in_flight.hermes-atlas.json'))
     fs.writeFileSync(path.join(dir, 'lease', 'write_lease.json'), '{not json')
     expect(readWriteLease(dir, () => T0)).toMatchObject({ held: false, why: 'lease_unreadable' })

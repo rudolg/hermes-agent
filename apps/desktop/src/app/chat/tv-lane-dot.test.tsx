@@ -29,8 +29,22 @@ describe('tvServerRows', () => {
     })
 
     expect(rows.map(r => r.name)).toEqual(['tradingview_hermes', 'tradingview_hermes_atlas'])
-    expect(rows[0]).toMatchObject({ enabled: false, gatewayOut: false, idleS: null, lane: 'hermes', lazy: false, write: true })
-    expect(rows[1]).toMatchObject({ enabled: true, gatewayOut: true, idleS: 900, lane: 'hermes-atlas', lazy: true, write: false })
+    expect(rows[0]).toMatchObject({
+      enabled: false,
+      gatewayOut: false,
+      idleS: null,
+      lane: 'hermes',
+      lazy: false,
+      write: true
+    })
+    expect(rows[1]).toMatchObject({
+      enabled: true,
+      gatewayOut: true,
+      idleS: 900,
+      lane: 'hermes-atlas',
+      lazy: true,
+      write: false
+    })
   })
 
   it('answers an empty list for no config, a missing block, or no tradingview entry', () => {

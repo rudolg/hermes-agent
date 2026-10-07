@@ -89,7 +89,18 @@ export interface TvLaneBindResult {
 /** One of the lamp's own lane scripts, started detached (they show their own dialogs). The allow-list IS the contract. */
 export type TvLaneRunRequest =
   | { action: 'create' }
-  | { action: 'chart-accept' | 'chart-add' | 'chart-remove' | 'lease-release' | 'lease-release-holder' | 'lease-take' | 'tab-assign-front' | 'tab-focus'; lane: string }
+  | {
+      action:
+        | 'chart-accept'
+        | 'chart-add'
+        | 'chart-remove'
+        | 'lease-release'
+        | 'lease-release-holder'
+        | 'lease-take'
+        | 'tab-assign-front'
+        | 'tab-focus'
+      lane: string
+    }
 
 export interface TvLanesApi {
   get: (workspacePaths: string[]) => Promise<TvLanesSnapshot>

@@ -547,7 +547,12 @@ function SidebarSessionRowImpl({
                         onPointerLeave={disarmMarquee}
                       >
                         <span className="hover-marquee-inner">
-                          <TvLaneDot className="mr-0.5 inline-flex align-middle" cwd={session.cwd} hideUnlinked sessionId={session.id} />
+                          <TvLaneDot
+                            className="mr-0.5 inline-flex align-middle"
+                            cwd={session.cwd}
+                            hideUnlinked
+                            sessionId={session.id}
+                          />
                           {title}
                         </span>
                       </SidebarRowLabel>
@@ -617,7 +622,12 @@ function SidebarSessionRowImpl({
                       onPointerLeave={disarmMarquee}
                     >
                       <span className="hover-marquee-inner">
-                        <TvLaneDot className="mr-0.5 inline-flex align-middle" cwd={session.cwd} hideUnlinked sessionId={session.id} />
+                        <TvLaneDot
+                          className="mr-0.5 inline-flex align-middle"
+                          cwd={session.cwd}
+                          hideUnlinked
+                          sessionId={session.id}
+                        />
                         {title}
                       </span>
                     </SidebarRowLabel>

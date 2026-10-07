@@ -17,7 +17,14 @@ import path from 'node:path'
 
 import { ipcMain } from 'electron'
 
-import type { TvLaneBindRequest, TvLaneBindResult, TvLaneRunRequest, TvLanesSnapshot, TvLaneView, TvWriteLease } from './tv-lanes-types'
+import type {
+  TvLaneBindRequest,
+  TvLaneBindResult,
+  TvLaneRunRequest,
+  TvLanesSnapshot,
+  TvLaneView,
+  TvWriteLease
+} from './tv-lanes-types'
 
 const LANE_ID_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{6,64}$/
@@ -25,7 +32,8 @@ const SNAPSHOT_MAX_PATHS = 64
 const ANCESTRY_HOPS = 8
 const HOLDER_CACHE_MS = 60_000
 /** The lamp's provisioner (menubar-plugins); overridable for a machine where it lives elsewhere. */
-const NEW_LANE_SCRIPT = process.env.HERMES_TV_LANE_NEW_SCRIPT || '/Users/spinec/src/menubar-plugins/tv-lane-new-hermes.py'
+const NEW_LANE_SCRIPT =
+  process.env.HERMES_TV_LANE_NEW_SCRIPT || '/Users/spinec/src/menubar-plugins/tv-lane-new-hermes.py'
 /** The lamp's lane scripts this app may start (owner's ask 2026-10-01: allowed charts per lane from the dot menu too). */
 const LAMP_DIR = process.env.HERMES_TV_LAMP_DIR || '/Users/spinec/src/menubar-plugins'
 
@@ -54,7 +62,16 @@ function readJson(file: string): unknown {
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const str = (v: unknown): null | string => (typeof v === 'string' && v.length > 0 ? v : null)
 
-const EMPTY_LEASE: TvWriteLease = { expiresAt: null, held: false, holderAlive: null, holderChart: null, holderLane: null, holderPid: null, inFlight: false, why: 'no_lease' }
+const EMPTY_LEASE: TvWriteLease = {
+  expiresAt: null,
+  held: false,
+  holderAlive: null,
+  holderChart: null,
+  holderLane: null,
+  holderPid: null,
+  inFlight: false,
+  why: 'no_lease'
+}
 
 /** Is this exact process instance alive? pid liveness by signal 0, identity by `ps lstart` (the claims' own notion):
  *  a recycled pid is NOT alive; an instance whose start cannot be compared counts as alive (never reported gone). */
@@ -70,7 +87,11 @@ function instanceAlive(pid: number, pidStart: unknown): boolean | null {
   let live = ''
 
   try {
-    live = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' }, timeout: 4000 }).trim()
+    live = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+      encoding: 'utf8',
+      env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' },
+      timeout: 4000
+    }).trim()
   } catch {
     live = ''
   }
@@ -84,7 +105,11 @@ function instanceAlive(pid: number, pidStart: unknown): boolean | null {
 
 /** A write is in flight when the marker exists, its count is positive and ITS process instance is alive; a marker that
  *  exists but cannot be read counts as in flight (cannot tell is never idle). Age plays no part. */
-function inFlightFor(leaseDir: string, lane: string, alive: (pid: number, pidStart: unknown) => boolean | null): boolean {
+function inFlightFor(
+  leaseDir: string,
+  lane: string,
+  alive: (pid: number, pidStart: unknown) => boolean | null
+): boolean {
   const file = path.join(leaseDir, `in_flight.${lane}.json`)
 
   if (!fs.existsSync(file)) {
@@ -102,7 +127,11 @@ function inFlightFor(leaseDir: string, lane: string, alive: (pid: number, pidSta
 
 /** THE WRITE SWITCH, read at answer time from the files the servers check (cdp-channels src/core/write_lease.js):
  *  the lease is held only when it exists, is well-formed, unexpired, and carries the CURRENT revocation epoch. */
-export function readWriteLease(dir: string, now: () => number = Date.now, alive: (pid: number, pidStart: unknown) => boolean | null = instanceAlive): TvWriteLease {
+export function readWriteLease(
+  dir: string,
+  now: () => number = Date.now,
+  alive: (pid: number, pidStart: unknown) => boolean | null = instanceAlive
+): TvWriteLease {
   const leaseDir = path.join(dir, 'lease')
   const file = path.join(leaseDir, 'write_lease.json')
 
@@ -117,7 +146,8 @@ export function readWriteLease(dir: string, now: () => number = Date.now, alive:
   }
 
   const holderLane = raw.holder_lane
-  const holderPid = typeof raw.holder_pid === 'number' && Number.isInteger(raw.holder_pid) && raw.holder_pid > 1 ? raw.holder_pid : null
+  const holderPid =
+    typeof raw.holder_pid === 'number' && Number.isInteger(raw.holder_pid) && raw.holder_pid > 1 ? raw.holder_pid : null
   const holderChart = str(raw.holder_chart)
   const expiresAt = str(raw.expires_at)
   let epoch: null | string = null
@@ -129,7 +159,15 @@ export function readWriteLease(dir: string, now: () => number = Date.now, alive:
     epoch = null
   }
 
-  const base = { expiresAt, held: false, holderAlive: holderPid === null ? null : alive(holderPid, raw.holder_pid_start), holderChart, holderLane, holderPid, inFlight: inFlightFor(leaseDir, holderLane, alive) }
+  const base = {
+    expiresAt,
+    held: false,
+    holderAlive: holderPid === null ? null : alive(holderPid, raw.holder_pid_start),
+    holderChart,
+    holderLane,
+    holderPid,
+    inFlight: inFlightFor(leaseDir, holderLane, alive)
+  }
 
   if (epoch === null) {
     return { ...base, why: 'epoch_unavailable' }
@@ -209,9 +247,9 @@ export function applyStatus(lanes: Record<string, TvLaneView>, status: unknown):
     const claimState = str(claim.state)
     lane.up = entry.up === true
     lane.active = entry.active === true
-    lane.claimState =
-      claimState === 'held' || claimState === 'free' || claimState === 'stale' ? claimState : 'unknown'
-    lane.holderPid = typeof holder.pid === 'number' && Number.isInteger(holder.pid) && holder.pid > 1 ? holder.pid : null
+    lane.claimState = claimState === 'held' || claimState === 'free' || claimState === 'stale' ? claimState : 'unknown'
+    lane.holderPid =
+      typeof holder.pid === 'number' && Number.isInteger(holder.pid) && holder.pid > 1 ? holder.pid : null
     lane.healthVerdict = str(health.verdict)
     lane.healthFresh = health.fresh === true
     lane.intended = str(charts.intended)
@@ -256,7 +294,10 @@ export function readBindings(file: string): TvLanesSnapshot['bindings'] {
       const lane = isRecord(row) ? str(row.lane) : null
 
       if (lane && LANE_ID_RE.test(lane)) {
-        out[scope][scope === 'workspaces' ? normalizePath(key) : key] = { lane, since: (isRecord(row) && str(row.since)) || '' }
+        out[scope][scope === 'workspaces' ? normalizePath(key) : key] = {
+          lane,
+          since: (isRecord(row) && str(row.since)) || ''
+        }
       }
     }
   }
@@ -267,7 +308,9 @@ export function readBindings(file: string): TvLanesSnapshot['bindings'] {
 function writeBindings(file: string, bindings: TvLanesSnapshot['bindings']): void {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const tmp = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, `${JSON.stringify({ bindings_schema: 'tv.hermes_bindings/v1', ...bindings }, null, 2)}\n`, { mode: 0o600 })
+  fs.writeFileSync(tmp, `${JSON.stringify({ bindings_schema: 'tv.hermes_bindings/v1', ...bindings }, null, 2)}\n`, {
+    mode: 0o600
+  })
   fs.renameSync(tmp, file)
 }
 
@@ -321,7 +364,9 @@ export async function holderAppOf(
     return 'hermes'
   }
 
-  if (chain.some(c => /\bhermes\b.*--run-module|\bhermes (gateway|serve)\b|\/hermes-agent\/.*\/bin\/hermes\b/.test(c))) {
+  if (
+    chain.some(c => /\bhermes\b.*--run-module|\bhermes (gateway|serve)\b|\/hermes-agent\/.*\/bin\/hermes\b/.test(c))
+  ) {
     return 'hermes-gateway'
   }
 
@@ -332,7 +377,12 @@ export async function holderAppOf(
   return 'other'
 }
 
-export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, now = Date.now, spawnProcess = spawn }: TvLanesIpcDeps): void {
+export function registerTvLanesIpc({
+  homeDir,
+  readProcess = defaultReadProcess,
+  now = Date.now,
+  spawnProcess = spawn
+}: TvLanesIpcDeps): void {
   const dir = stateDir(homeDir)
   const bindingsFile = bindingsPathFor(homeDir)
   const holderCache = new Map<number, { at: number; app: TvLaneView['holderApp'] }>()
@@ -439,9 +489,17 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
         const app = target.holderPid === null ? null : await holderAppOf(target.holderPid, readProcess)
 
         if (app !== 'hermes') {
-          const who = app === 'claude' ? 'a Claude window' : app === 'hermes-gateway' ? 'the background Hermes gateway' : 'another process'
+          const who =
+            app === 'claude'
+              ? 'a Claude window'
+              : app === 'hermes-gateway'
+                ? 'the background Hermes gateway'
+                : 'another process'
 
-          return { error: `lane ${lane} is held by ${who} (pid ${target.holderPid ?? '?'}); release it there first — one chart never has two drivers`, ok: false }
+          return {
+            error: `lane ${lane} is held by ${who} (pid ${target.holderPid ?? '?'}); release it there first — one chart never has two drivers`,
+            ok: false
+          }
         }
       }
     }
@@ -479,7 +537,11 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
 
     const lane = (request as { lane?: unknown }).lane
 
-    if (typeof lane !== 'string' || !LANE_ID_RE.test(lane) || !lanesFromRegistry(readJson(path.join(dir, 'channels.json')))[lane]) {
+    if (
+      typeof lane !== 'string' ||
+      !LANE_ID_RE.test(lane) ||
+      !lanesFromRegistry(readJson(path.join(dir, 'channels.json')))[lane]
+    ) {
       return null
     }
 
@@ -488,7 +550,11 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
     }
 
     if (action === 'chart-add' || action === 'chart-remove') {
-      return { args: [lane, action === 'chart-add' ? 'add' : 'remove'], interpreter: '/usr/bin/python3', script: path.join(LAMP_DIR, 'tv-lane-layouts.py') }
+      return {
+        args: [lane, action === 'chart-add' ? 'add' : 'remove'],
+        interpreter: '/usr/bin/python3',
+        script: path.join(LAMP_DIR, 'tv-lane-layouts.py')
+      }
     }
 
     // the tab in front of the automation browser becomes this lane's tab (the lamp's own one-click bind)
@@ -524,7 +590,10 @@ export function registerTvLanesIpc({ homeDir, readProcess = defaultReadProcess, 
     }
 
     try {
-      const child = spawnProcess(target.interpreter, [target.script, ...target.args], { detached: true, stdio: 'ignore' })
+      const child = spawnProcess(target.interpreter, [target.script, ...target.args], {
+        detached: true,
+        stdio: 'ignore'
+      })
       child.unref()
     } catch (error) {
       return { error: `script not started: ${error instanceof Error ? error.message : String(error)}`, ok: false }

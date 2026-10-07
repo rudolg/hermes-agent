@@ -26,7 +26,8 @@ export function tvServerRows(config: null | { mcp_servers?: unknown }): TvServer
     .map(([name, cfg]) => {
       const env = typeof cfg.env === 'object' && cfg.env !== null ? (cfg.env as Record<string, unknown>) : {}
       const caps = str(env.TV_MCP_CAPABILITIES) ?? ''
-      const idle = typeof cfg.idle_timeout_seconds === 'number' ? cfg.idle_timeout_seconds : Number(cfg.idle_timeout_seconds)
+      const idle =
+        typeof cfg.idle_timeout_seconds === 'number' ? cfg.idle_timeout_seconds : Number(cfg.idle_timeout_seconds)
 
       return {
         enabled: serverEnabled(cfg),
@@ -39,4 +40,3 @@ export function tvServerRows(config: null | { mcp_servers?: unknown }): TvServer
       }
     })
 }
-
